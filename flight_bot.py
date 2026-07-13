@@ -29,7 +29,6 @@ WEEKDAYS_RU = {
 }
 
 def reset_webhook():
-    """Сбрасывает вебхук при запуске бота"""
     try:
         bot = Bot(TOKEN)
         bot.delete_webhook()
@@ -145,6 +144,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     await update.message.reply_text("🔍 Ищу билеты... Это займет несколько секунд.")
     try:
+        # --- ПАРСИНГ ЗАПРОСА ---
         delimiters = ["→", "->", "-", "—", "–"]
         query_parts = None
         for delim in delimiters:
@@ -171,6 +171,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Неправильный формат. Используй: `LHR → JFK 2026-07-20`")
             return
         from_city, to_city, date = query_parts
+
+        # --- ПОИСК БИЛЕТОВ ---
         query = create_query(
             flights=[FlightQuery(date=date, from_airport=from_city, to_airport=to_city)],
             seat="economy",
@@ -178,14 +180,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             passengers=Passengers(adults=1),
             language="en-US",
         )
-        result = get_flights(query)
-        if not result or len(result) == 0:
-            await update.message.reply_text(f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.")
+        
+        # Пробуем получить результат
+        try:
+            result = get_flights(query)
+            # Проверяем результат
+            if result is None:
+                await update.message.reply_text("❌ Сервер вернул пустой ответ. Попробуйте позже.")
+                return
+            if len(result) == 0:
+                await update.message.reply_text(f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.")
+                return
+            # Отладочная информация
+            if len(result) > 0:
+                first = result[0]
+                debug_msg = f"🔍 Тип результата: {type(first)}\n"
+                if hasattr(first, '__dict__'):
+                    debug_msg += f"🔍 Данные: {first.__dict__}\n"
+                await update.message.reply_text(debug_msg[:500])
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка поиска: {str(e)}")
             return
+
+        # --- ПАРСИНГ ДАННЫХ ---
         flights_data = parse_flight_data(result)
         if not flights_data:
             await update.message.reply_text("❌ Не удалось получить детали рейсов.")
             return
+
+        # --- ФОРМИРОВАНИЕ ОТВЕТА ---
         response = f"✈️ Найдено {len(flights_data)} вариантов:\n\n"
         for i, flight in enumerate(flights_data[:10], 1):
             price_usd = flight['price_usd']
@@ -207,11 +230,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response += "\n"
         response += "💡 Для покупки перейдите на сайт авиакомпании."
         await update.message.reply_text(response)
+        
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
 def main():
-    reset_webhook()  # <--- Сброс вебхука при запуске
+    reset_webhook()
     app = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
