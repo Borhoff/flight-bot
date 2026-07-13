@@ -28,19 +28,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 Ищу билеты... Это займет несколько секунд.")
     
     try:
-        # Парсинг запроса: "SVO → PVG 2026-07-17"
+        # Парсинг запроса
         parts = text.split("→")
         if len(parts) != 2:
-            await update.message.reply_text(
-                "❌ Неправильный формат. Используй:\n"
-                "`SVO → PVG 2026-07-17`"
-            )
+            await update.message.reply_text("❌ Неправильный формат. Используй: SVO → PVG 2026-07-17")
             return
             
         from_city = parts[0].strip().upper()
         rest = parts[1].strip().split(" ")
         if len(rest) < 2:
-            await update.message.reply_text("❌ Не указана дата. Используй: SVO → PVG 2026-07-17")
+            await update.message.reply_text("❌ Не указана дата.")
             return
             
         to_city = rest[0].strip().upper()
@@ -55,61 +52,84 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Поиск билетов через fast-flights
-        try:
-            query = create_query(
-                flights=[
-                    FlightQuery(
-                        date=date,
-                        from_airport=from_city,
-                        to_airport=to_city,
-                    ),
-                ],
-                seat="economy",
-                trip="one-way",
-                passengers=Passengers(adults=1),
-                language="en-US",
+        query = create_query(
+            flights=[FlightQuery(date=date, from_airport=from_city, to_airport=to_city)],
+            seat="economy",
+            trip="one-way",
+            passengers=Passengers(adults=1),
+            language="en-US",
+        )
+        
+        result = get_flights(query)
+        
+        if not result or len(result) == 0:
+            await update.message.reply_text(
+                f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.\n"
+                "Попробуйте другую дату или направление."
             )
-            
-            result = get_flights(query)
-            
-            # Проверка результата
-            if result is None:
-                await update.message.reply_text(
-                    "❌ API вернул None. Возможно, проблема с подключением.\n"
-                    "Попробуйте позже или другой маршрут."
-                )
-                return
+            return
+        
+        # Формируем ответ с правильным парсингом
+        response = f"✈️ Найдено {len(result)} рейсов:\n\n"
+        
+        for i, flight in enumerate(result[:5], 1):
+            # Пробуем разные способы получить данные
+            try:
+                # Авиакомпания
+                airline = "N/A"
+                if hasattr(flight, 'airline') and flight.airline:
+                    airline = flight.airline
+                elif hasattr(flight, 'carrier') and flight.carrier:
+                    airline = flight.carrier
+                elif hasattr(flight, 'name') and flight.name:
+                    airline = flight.name
                 
-            if not hasattr(result, '__len__') or len(result) == 0:
-                await update.message.reply_text(
-                    f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.\n\n"
-                    "Попробуйте:\n"
-                    "• Другую дату (например, 2026-07-25)\n"
-                    "• Другой маршрут (LHR → NYC)\n"
-                    "• Убедитесь, что используете IATA-коды аэропортов: SVO, DME, PVG, IST"
-                )
-                return
+                # Цена
+                price = "N/A"
+                currency = ""
+                if hasattr(flight, 'price') and flight.price:
+                    price = flight.price
+                if hasattr(flight, 'currency') and flight.currency:
+                    currency = flight.currency
                 
-            # Формируем ответ
-            response = f"✈️ Найдено {len(result)} рейсов:\n\n"
-            for i, flight in enumerate(result[:5], 1):
-                airline = getattr(flight, 'airline', 'N/A')
-                price = getattr(flight, 'price', 'N/A')
-                currency = getattr(flight, 'currency', '')
-                departure = getattr(flight, 'departure', 'N/A')
-                arrival = getattr(flight, 'arrival', 'N/A')
+                # Время вылета
+                departure = "N/A"
+                if hasattr(flight, 'departure') and flight.departure:
+                    departure = flight.departure
+                elif hasattr(flight, 'departure_time') and flight.departure_time:
+                    departure = flight.departure_time
+                elif hasattr(flight, 'outbound') and flight.outbound:
+                    departure = flight.outbound
+                
+                # Время прилета
+                arrival = "N/A"
+                if hasattr(flight, 'arrival') and flight.arrival:
+                    arrival = flight.arrival
+                elif hasattr(flight, 'arrival_time') and flight.arrival_time:
+                    arrival = flight.arrival_time
+                elif hasattr(flight, 'inbound') and flight.inbound:
+                    arrival = flight.inbound
+                
+                # Пересадки
+                stops = "N/A"
+                if hasattr(flight, 'stops') and flight.stops is not None:
+                    stops = flight.stops
+                elif hasattr(flight, 'stop_count') and flight.stop_count is not None:
+                    stops = flight.stop_count
                 
                 response += f"{i}. {airline} - {price} {currency}\n"
-                response += f"   Вылет: {departure} → Прилет: {arrival}\n\n"
-            
-            response += "💡 Для покупки перейдите на сайт авиакомпании."
-            await update.message.reply_text(response)
-            
-        except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при поиске: {str(e)}")
-            
+                response += f"   Вылет: {departure} → Прилет: {arrival}\n"
+                response += f"   Пересадки: {stops}\n\n"
+                
+            except Exception as e:
+                logging.error(f"Error parsing flight {i}: {e}")
+                response += f"{i}. Ошибка при парсинге рейса\n\n"
+        
+        response += "💡 Для покупки перейдите на сайт авиакомпании."
+        await update.message.reply_text(response)
+        
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка при обработке запроса: {str(e)}")
+        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
 def main():
     app = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).build()
