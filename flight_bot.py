@@ -1,83 +1,104 @@
 import os
 import logging
-import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from letsfg.local import search_local
+from fast_flights import FlightQuery, Passengers, create_query, get_flights
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Токен бота (задайте позже на Render)
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "ВАШ_ТОКЕН_ОТ_BOTFATHER")
+# Токен бота из переменной окружения
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 # Стартовая команда
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "✈️ Привет! Я бот для поиска авиабилетов.\n\n"
         "Отправь мне запрос в формате:\n"
-        "`Москва → Стамбул 2026-07-20`\n\n"
-        "Или используй кнопки ниже для ввода.",
+        "`MOW → IST 2026-07-20`\n\n"
+        "Используй IATA-коды городов (3 буквы):\n"
+        "MOW - Москва, IST - Стамбул, LHR - Лондон, NYC - Нью-Йорк",
         parse_mode="Markdown"
     )
 
 # Обработка текстовых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    await update.message.reply_text("🔍 Ищу билеты... Это может занять 20-40 секунд.")
+    await update.message.reply_text("🔍 Ищу билеты... Это займет несколько секунд.")
     
     try:
-        # Парсинг запроса: "Москва → Стамбул 2026-07-20"
+        # Парсинг запроса: "MOW → IST 2026-07-20"
         parts = text.split("→")
         if len(parts) != 2:
-            await update.message.reply_text("❌ Неправильный формат. Используй: Город → Город Дата")
+            await update.message.reply_text(
+                "❌ Неправильный формат. Используй:\n"
+                "`MOW → IST 2026-07-20`"
+            )
             return
             
-        from_city = parts[0].strip()
+        from_city = parts[0].strip().upper()
         rest = parts[1].strip().split(" ")
         if len(rest) < 2:
-            await update.message.reply_text("❌ Не указана дата. Используй: Город → Город ГГГГ-ММ-ДД")
+            await update.message.reply_text("❌ Не указана дата. Используй: MOW → IST 2026-07-20")
             return
             
-        to_city = rest[0].strip()
+        to_city = rest[0].strip().upper()
         date = rest[1].strip()
         
-        # Поиск билетов через LetsFG
-        offers = await search_local(from_city, to_city, date)
+        # Проверка формата даты
+        try:
+            from datetime import datetime
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            await update.message.reply_text("❌ Неправильный формат даты. Используй ГГГГ-ММ-ДД")
+            return
         
-        if not offers:
-            await update.message.reply_text("❌ Рейсы не найдены. Попробуйте другую дату или направление.")
+        # Поиск билетов через fast-flights
+        query = create_query(
+            flights=[
+                FlightQuery(
+                    date=date,
+                    from_airport=from_city,
+                    to_airport=to_city,
+                ),
+            ],
+            seat="economy",
+            trip="one-way",
+            passengers=Passengers(adults=1),
+            language="en-US",
+        )
+        
+        result = get_flights(query)
+        
+        if not result:
+            await update.message.reply_text(
+                f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.\n"
+                "Попробуйте другую дату или направление."
+            )
             return
         
         # Формируем ответ
-        response = f"✈️ Найдено {len(offers)} рейсов:\n\n"
-        for i, offer in enumerate(offers[:5], 1):
-            airlines = ", ".join(offer.airlines) if hasattr(offer, 'airlines') else "N/A"
-            price = offer.price if hasattr(offer, 'price') else "N/A"
-            currency = offer.currency if hasattr(offer, 'currency') else ""
-            dep_time = offer.departure_time if hasattr(offer, 'departure_time') else "N/A"
-            arr_time = offer.arrival_time if hasattr(offer, 'arrival_time') else "N/A"
-            stops = offer.stops if hasattr(offer, 'stops') else "N/A"
+        response = f"✈️ Найдено {len(result)} рейсов:\n\n"
+        for i, flight in enumerate(result[:5], 1):
+            airline = getattr(flight, 'airline', 'N/A')
+            price = getattr(flight, 'price', 'N/A')
+            currency = getattr(flight, 'currency', '')
+            departure = getattr(flight, 'departure', 'N/A')
+            arrival = getattr(flight, 'arrival', 'N/A')
             
-            response += f"{i}. {airlines} - {price} {currency}\n"
-            response += f"   Вылет: {dep_time} → Прилет: {arr_time}\n"
-            response += f"   Пересадки: {stops}\n\n"
+            response += f"{i}. {airline} - {price} {currency}\n"
+            response += f"   Вылет: {departure} → Прилет: {arrival}\n\n"
         
-        response += "💡 Для покупки перейдите на сайт авиакомпании и найдите этот рейс."
+        response += "💡 Для покупки перейдите на сайт авиакомпании."
         await update.message.reply_text(response)
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка при поиске: {str(e)}. Попробуйте другой запрос.")
 
 def main():
-    # Создаем приложение
-    app = Application.builder().token(TOKEN).build()
-    
-    # Добавляем обработчики
+    app = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # Запускаем бота
     print("✅ Бот запущен и готов к работе!")
     app.run_polling()
 
