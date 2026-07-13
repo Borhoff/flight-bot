@@ -181,12 +181,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             language="en-US",
         )
         
-        # Пробуем получить результат
+        # --- ОТЛАДКА ---
         try:
             result = get_flights(query)
             # Проверяем результат
             if result is None:
-                await update.message.reply_text("❌ Сервер вернул пустой ответ. Попробуйте позже.")
+                await update.message.reply_text("❌ fast-flights вернул None")
                 return
             if len(result) == 0:
                 await update.message.reply_text(f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.")
@@ -194,10 +194,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Отладочная информация
             if len(result) > 0:
                 first = result[0]
-                debug_msg = f"🔍 Тип результата: {type(first)}\n"
+                debug_msg = f"🔍 Тип: {type(first)}\n"
+                debug_msg += f"🔍 Атрибуты: {dir(first)[:15]}\n"
                 if hasattr(first, '__dict__'):
                     debug_msg += f"🔍 Данные: {first.__dict__}\n"
-                await update.message.reply_text(debug_msg[:500])
+                # Также показываем строковое представление
+                debug_msg += f"🔍 Строка: {str(first)[:300]}"
+                await update.message.reply_text(debug_msg[:1000])
         except Exception as e:
             await update.message.reply_text(f"❌ Ошибка поиска: {str(e)}")
             return
