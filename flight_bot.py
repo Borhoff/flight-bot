@@ -29,12 +29,15 @@ WEEKDAYS_RU = {
 }
 
 def reset_webhook():
+    """Принудительный сброс вебхука"""
     try:
         bot = Bot(TOKEN)
         bot.delete_webhook()
         print("✅ Вебхук сброшен")
+        return True
     except Exception as e:
-        print(f"❌ Ошибка сброса вебхука: {e}")
+        print(f"⚠️ Ошибка сброса вебхука: {e}")
+        return False
 
 def format_date_with_weekday(date_str):
     try:
@@ -181,28 +184,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             language="en-US",
         )
         
-        # --- ОТЛАДКА ---
-        try:
-            result = get_flights(query)
-            # Проверяем результат
-            if result is None:
-                await update.message.reply_text("❌ fast-flights вернул None")
-                return
-            if len(result) == 0:
-                await update.message.reply_text(f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.")
-                return
-            # Отладочная информация
-            if len(result) > 0:
-                first = result[0]
-                debug_msg = f"🔍 Тип: {type(first)}\n"
-                debug_msg += f"🔍 Атрибуты: {dir(first)[:15]}\n"
-                if hasattr(first, '__dict__'):
-                    debug_msg += f"🔍 Данные: {first.__dict__}\n"
-                # Также показываем строковое представление
-                debug_msg += f"🔍 Строка: {str(first)[:300]}"
-                await update.message.reply_text(debug_msg[:1000])
-        except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка поиска: {str(e)}")
+        result = get_flights(query)
+        if result is None or len(result) == 0:
+            await update.message.reply_text(f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.")
             return
 
         # --- ПАРСИНГ ДАННЫХ ---
@@ -238,7 +222,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
 def main():
+    # Принудительный сброс вебхука при запуске
     reset_webhook()
+    
+    # Запуск бота
     app = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
