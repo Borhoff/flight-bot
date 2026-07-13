@@ -2,6 +2,7 @@ import os
 import logging
 import re
 import json
+from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
@@ -11,6 +12,130 @@ logging.basicConfig(level=logging.INFO)
 
 # Токен бота из переменной окружения
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+
+# Курс USD к RUB (можно обновлять)
+USD_TO_RUB = 95.0
+
+# Месяцы на русском
+MONTHS_RU = {
+    1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля',
+    5: 'мая', 6: 'июня', 7: 'июля', 8: 'августа',
+    9: 'сентября', 10: 'октября', 11: 'ноября', 12: 'декабря'
+}
+
+# Дни недели на русском (сокращенно)
+WEEKDAYS_RU = {
+    0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'
+}
+
+def format_date_with_weekday(date_str):
+    """Формат: 15 июля (Ср), 10:50"""
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M")
+        day = dt.day
+        month = MONTHS_RU[dt.month]
+        hour = dt.hour
+        minute = dt.minute
+        weekday = WEEKDAYS_RU[dt.weekday()]
+        return f"{day} {month} ({weekday}), {hour:02d}:{minute:02d}"
+    except:
+        return date_str
+
+def format_duration(minutes):
+    """Формат: 3ч 20м, 1ч 30м, 45м"""
+    if minutes == 'N/A' or minutes is None:
+        return 'N/A'
+    try:
+        mins = int(minutes)
+        hours = mins // 60
+        mins_remain = mins % 60
+        
+        if hours > 0 and mins_remain > 0:
+            return f"{hours}ч {mins_remain}м"
+        elif hours > 0:
+            return f"{hours}ч"
+        else:
+            return f"{mins_remain}м"
+    except:
+        return str(minutes)
+
+def parse_single_flight(seg_str):
+    """Парсит один сегмент перелета из строки SingleFlight"""
+    result = {
+        'from_airport': 'N/A',
+        'from_code': 'N/A',
+        'to_airport': 'N/A',
+        'to_code': 'N/A',
+        'departure': 'N/A',
+        'arrival': 'N/A',
+        'duration': 'N/A',
+    }
+    
+    try:
+        from_match = re.search(r"from_airport=Airport\(name='([^']+)', code='([^']+)'\)", seg_str)
+        if from_match:
+            result['from_airport'] = from_match.group(1)
+            result['from_code'] = from_match.group(2)
+        
+        to_match = re.search(r"to_airport=Airport\(name='([^']+)', code='([^']+)'\)", seg_str)
+        if to_match:
+            result['to_airport'] = to_match.group(1)
+            result['to_code'] = to_match.group(2)
+        
+        # Время вылета
+        dep_match = re.search(r"departure=SimpleDatetime\(date=\[(\d+), (\d+), (\d+)\], time=\[(\d+), (\d+)\]\)", seg_str)
+        if dep_match:
+            year, month, day = dep_match.group(1), dep_match.group(2), dep_match.group(3)
+            hour, minute = dep_match.group(4), dep_match.group(5)
+            result['departure'] = f"{year}-{month.zfill(2)}-{day.zfill(2)} {hour.zfill(2)}:{minute.zfill(2)}"
+        
+        # Время прилета
+        arr_match = re.search(r"arrival=SimpleDatetime\(date=\[(\d+), (\d+), (\d+)\], time=\[(\d+), (\d+)\]\)", seg_str)
+        if arr_match:
+            year, month, day = arr_match.group(1), arr_match.group(2), arr_match.group(3)
+            hour, minute = arr_match.group(4), arr_match.group(5)
+            result['arrival'] = f"{year}-{month.zfill(2)}-{day.zfill(2)} {hour.zfill(2)}:{minute.zfill(2)}"
+        
+        # Длительность
+        dur_match = re.search(r"duration=(\d+)", seg_str)
+        if dur_match:
+            result['duration'] = dur_match.group(1)
+        
+    except Exception as e:
+        logging.error(f"Error parsing segment: {e}")
+    
+    return result
+
+def parse_flight_data(result):
+    """Извлекает информацию о рейсах из объекта Flights"""
+    flights_data = []
+    
+    for flight in result:
+        try:
+            price_usd = getattr(flight, 'price', 'N/A')
+            airlines = getattr(flight, 'airlines', [])
+            airline = airlines[0] if airlines else 'N/A'
+            
+            flight_list = getattr(flight, 'flights', [])
+            
+            segments = []
+            for seg in flight_list:
+                seg_str = str(seg)
+                parsed = parse_single_flight(seg_str)
+                segments.append(parsed)
+            
+            flights_data.append({
+                'airline': airline,
+                'price_usd': price_usd,
+                'segments': segments,
+                'total_segments': len(segments),
+            })
+            
+        except Exception as e:
+            logging.error(f"Error parsing flight: {e}")
+            continue
+    
+    return flights_data
 
 # Стартовая команда
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -24,74 +149,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🇹🇷 IST → 🇬🇧 LHR 2026-07-20",
         parse_mode="Markdown"
     )
-
-# Парсинг рейсов из ответа fast-flights
-def parse_flight_data(result):
-    """Извлекает информацию о рейсах из объекта Flights"""
-    flights_data = []
-    
-    for flight in result:
-        try:
-            # Базовая информация
-            price = getattr(flight, 'price', 'N/A')
-            airlines = getattr(flight, 'airlines', [])
-            airline = airlines[0] if airlines else 'N/A'
-            
-            # Получаем список перелетов
-            flight_list = getattr(flight, 'flights', [])
-            
-            # Собираем информацию по каждому сегменту
-            segments = []
-            for seg in flight_list:
-                # Парсим строковое представление SingleFlight
-                seg_str = str(seg)
-                
-                # Извлекаем аэропорты
-                from_match = re.search(r"from_airport=Airport\(name='([^']+)', code='([^']+)'\)", seg_str)
-                to_match = re.search(r"to_airport=Airport\(name='([^']+)', code='([^']+)'\)", seg_str)
-                dep_match = re.search(r"departure=SimpleDatetime\(date=\[(\d+), (\d+), (\d+)\], time=\[(\d+), (\d+)\]\)", seg_str)
-                arr_match = re.search(r"arrival=SimpleDatetime\(date=\[(\d+), (\d+), (\d+)\], time=\[(\d+), (\d+)\]\)", seg_str)
-                dur_match = re.search(r"duration=(\d+)", seg_str)
-                
-                from_airport = f"{from_match.group(1)} ({from_match.group(2)})" if from_match else "N/A"
-                to_airport = f"{to_match.group(1)} ({to_match.group(2)})" if to_match else "N/A"
-                
-                if dep_match:
-                    dep_time = f"{dep_match.group(4)}:{dep_match.group(5).zfill(2)}"
-                    dep_date = f"{dep_match.group(1)}-{dep_match.group(2).zfill(2)}-{dep_match.group(3).zfill(2)}"
-                    departure = f"{dep_date} {dep_time}"
-                else:
-                    departure = "N/A"
-                    
-                if arr_match:
-                    arr_time = f"{arr_match.group(4)}:{arr_match.group(5).zfill(2)}"
-                    arr_date = f"{arr_match.group(1)}-{arr_match.group(2).zfill(2)}-{arr_match.group(3).zfill(2)}"
-                    arrival = f"{arr_date} {arr_time}"
-                else:
-                    arrival = "N/A"
-                
-                duration = dur_match.group(1) if dur_match else "N/A"
-                
-                segments.append({
-                    'from': from_airport,
-                    'to': to_airport,
-                    'departure': departure,
-                    'arrival': arrival,
-                    'duration': duration,
-                })
-            
-            flights_data.append({
-                'airline': airline,
-                'price': price,
-                'segments': segments,
-                'total_segments': len(segments),
-            })
-            
-        except Exception as e:
-            logging.error(f"Error parsing flight: {e}")
-            continue
-    
-    return flights_data
 
 # Обработка текстовых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -161,16 +218,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Формируем ответ
         response = f"✈️ Найдено {len(flights_data)} вариантов:\n\n"
         
-        for i, flight in enumerate(flights_data[:5], 1):
-            response += f"{i}. ✈️ {flight['airline']} - {flight['price']} USD\n"
+        for i, flight in enumerate(flights_data[:10], 1):
+            price_usd = flight['price_usd']
+            price_rub = int(price_usd * USD_TO_RUB) if price_usd != 'N/A' else 'N/A'
+            response += f"{i}. ✈️ {flight['airline']} - {price_rub} ₽ ({price_usd} USD)\n"
             
             for j, seg in enumerate(flight['segments'], 1):
-                response += f"   Сегмент {j}: {seg['from']} → {seg['to']}\n"
-                response += f"      Вылет: {seg['departure']}\n"
-                response += f"      Прилет: {seg['arrival']}\n"
-                response += f"      В пути: {seg['duration']} мин\n"
+                dep = format_date_with_weekday(seg['departure']) if seg['departure'] != 'N/A' else 'N/A'
+                arr = format_date_with_weekday(seg['arrival']) if seg['arrival'] != 'N/A' else 'N/A'
+                dur = format_duration(seg['duration'])
+                
+                response += f"   {j}→ {seg['from_airport']} ({seg['from_code']}) → {seg['to_airport']} ({seg['to_code']})\n"
+                response += f"      🛫 {dep}\n"
+                response += f"      🛬 {arr}\n"
+                response += f"      ⏱ {dur}\n"
             
-            response += f"   Пересадок: {flight['total_segments'] - 1}\n\n"
+            stops = flight['total_segments'] - 1
+            if stops == 0:
+                response += f"   🟢 Прямой рейс\n"
+            else:
+                response += f"   🔄 Пересадок: {stops}\n"
+            response += "\n"
         
         response += "💡 Для покупки перейдите на сайт авиакомпании."
         await update.message.reply_text(response)
