@@ -3,7 +3,7 @@ import logging
 import re
 import json
 from datetime import datetime
-from telegram import Update
+from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
 
@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO)
 # Токен бота из переменной окружения
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-# Курс USD к RUB (можно обновлять)
+# Курс USD к RUB
 USD_TO_RUB = 95.0
 
 # Месяцы на русском
@@ -28,8 +28,16 @@ WEEKDAYS_RU = {
     0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'
 }
 
+def reset_webhook():
+    """Сбрасывает вебхук при запуске бота"""
+    try:
+        bot = Bot(TOKEN)
+        bot.delete_webhook()
+        print("✅ Вебхук сброшен")
+    except Exception as e:
+        print(f"❌ Ошибка сброса вебхука: {e}")
+
 def format_date_with_weekday(date_str):
-    """Формат: 15 июля (Ср), 10:50"""
     try:
         dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M")
         day = dt.day
@@ -42,14 +50,12 @@ def format_date_with_weekday(date_str):
         return date_str
 
 def format_duration(minutes):
-    """Формат: 3ч 20м, 1ч 30м, 45м"""
     if minutes == 'N/A' or minutes is None:
         return 'N/A'
     try:
         mins = int(minutes)
         hours = mins // 60
         mins_remain = mins % 60
-        
         if hours > 0 and mins_remain > 0:
             return f"{hours}ч {mins_remain}м"
         elif hours > 0:
@@ -60,7 +66,6 @@ def format_duration(minutes):
         return str(minutes)
 
 def parse_single_flight(seg_str):
-    """Парсит один сегмент перелета из строки SingleFlight"""
     result = {
         'from_airport': 'N/A',
         'from_code': 'N/A',
@@ -70,7 +75,6 @@ def parse_single_flight(seg_str):
         'arrival': 'N/A',
         'duration': 'N/A',
     }
-    
     try:
         from_match = re.search(r"from_airport=Airport\(name='([^']+)', code='([^']+)'\)", seg_str)
         if from_match:
@@ -82,62 +86,49 @@ def parse_single_flight(seg_str):
             result['to_airport'] = to_match.group(1)
             result['to_code'] = to_match.group(2)
         
-        # Время вылета
         dep_match = re.search(r"departure=SimpleDatetime\(date=\[(\d+), (\d+), (\d+)\], time=\[(\d+), (\d+)\]\)", seg_str)
         if dep_match:
             year, month, day = dep_match.group(1), dep_match.group(2), dep_match.group(3)
             hour, minute = dep_match.group(4), dep_match.group(5)
             result['departure'] = f"{year}-{month.zfill(2)}-{day.zfill(2)} {hour.zfill(2)}:{minute.zfill(2)}"
         
-        # Время прилета
         arr_match = re.search(r"arrival=SimpleDatetime\(date=\[(\d+), (\d+), (\d+)\], time=\[(\d+), (\d+)\]\)", seg_str)
         if arr_match:
             year, month, day = arr_match.group(1), arr_match.group(2), arr_match.group(3)
             hour, minute = arr_match.group(4), arr_match.group(5)
             result['arrival'] = f"{year}-{month.zfill(2)}-{day.zfill(2)} {hour.zfill(2)}:{minute.zfill(2)}"
         
-        # Длительность
         dur_match = re.search(r"duration=(\d+)", seg_str)
         if dur_match:
             result['duration'] = dur_match.group(1)
-        
     except Exception as e:
         logging.error(f"Error parsing segment: {e}")
-    
     return result
 
 def parse_flight_data(result):
-    """Извлекает информацию о рейсах из объекта Flights"""
     flights_data = []
-    
     for flight in result:
         try:
             price_usd = getattr(flight, 'price', 'N/A')
             airlines = getattr(flight, 'airlines', [])
             airline = airlines[0] if airlines else 'N/A'
-            
             flight_list = getattr(flight, 'flights', [])
-            
             segments = []
             for seg in flight_list:
                 seg_str = str(seg)
                 parsed = parse_single_flight(seg_str)
                 segments.append(parsed)
-            
             flights_data.append({
                 'airline': airline,
                 'price_usd': price_usd,
                 'segments': segments,
                 'total_segments': len(segments),
             })
-            
         except Exception as e:
             logging.error(f"Error parsing flight: {e}")
             continue
-    
     return flights_data
 
-# Стартовая команда
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "✈️ Привет! Я бот для поиска авиабилетов.\n\n"
@@ -150,16 +141,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# Обработка текстовых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     await update.message.reply_text("🔍 Ищу билеты... Это займет несколько секунд.")
-    
     try:
-        # Парсинг запроса
         delimiters = ["→", "->", "-", "—", "–"]
         query_parts = None
-
         for delim in delimiters:
             if delim in text:
                 parts = text.split(delim)
@@ -173,7 +160,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         from_city = from_part.upper()
                         query_parts = (from_city, to_city, date)
                         break
-
         if not query_parts:
             match = re.search(r'([A-Z]{3})\s*[→\-–—>]\s*([A-Z]{3})\s+(\d{4}-\d{2}-\d{2})', text)
             if match:
@@ -181,17 +167,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 to_city = match.group(2).upper()
                 date = match.group(3)
                 query_parts = (from_city, to_city, date)
-
         if not query_parts:
-            await update.message.reply_text(
-                "❌ Неправильный формат. Используй:\n"
-                "`LHR → JFK 2026-07-20`"
-            )
+            await update.message.reply_text("❌ Неправильный формат. Используй: `LHR → JFK 2026-07-20`")
             return
-
         from_city, to_city, date = query_parts
-        
-        # Поиск билетов через fast-flights
         query = create_query(
             flights=[FlightQuery(date=date, from_airport=from_city, to_airport=to_city)],
             seat="economy",
@@ -199,54 +178,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             passengers=Passengers(adults=1),
             language="en-US",
         )
-        
         result = get_flights(query)
-        
         if not result or len(result) == 0:
-            await update.message.reply_text(
-                f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}."
-            )
+            await update.message.reply_text(f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.")
             return
-        
-        # Парсим данные
         flights_data = parse_flight_data(result)
-        
         if not flights_data:
             await update.message.reply_text("❌ Не удалось получить детали рейсов.")
             return
-        
-        # Формируем ответ
         response = f"✈️ Найдено {len(flights_data)} вариантов:\n\n"
-        
         for i, flight in enumerate(flights_data[:10], 1):
             price_usd = flight['price_usd']
             price_rub = int(price_usd * USD_TO_RUB) if price_usd != 'N/A' else 'N/A'
             response += f"{i}. ✈️ {flight['airline']} - {price_rub} ₽ ({price_usd} USD)\n"
-            
             for j, seg in enumerate(flight['segments'], 1):
                 dep = format_date_with_weekday(seg['departure']) if seg['departure'] != 'N/A' else 'N/A'
                 arr = format_date_with_weekday(seg['arrival']) if seg['arrival'] != 'N/A' else 'N/A'
                 dur = format_duration(seg['duration'])
-                
                 response += f"   {j}→ {seg['from_airport']} ({seg['from_code']}) → {seg['to_airport']} ({seg['to_code']})\n"
                 response += f"      🛫 {dep}\n"
                 response += f"      🛬 {arr}\n"
                 response += f"      ⏱ {dur}\n"
-            
             stops = flight['total_segments'] - 1
             if stops == 0:
                 response += f"   🟢 Прямой рейс\n"
             else:
                 response += f"   🔄 Пересадок: {stops}\n"
             response += "\n"
-        
         response += "💡 Для покупки перейдите на сайт авиакомпании."
         await update.message.reply_text(response)
-        
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
 def main():
+    reset_webhook()  # <--- Сброс вебхука при запуске
     app = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
