@@ -2,20 +2,37 @@ import os
 import logging
 import re
 import json
+import threading
 from datetime import datetime
+from flask import Flask
 from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
 
-# Настройка логирования
+# --- НАСТРОЙКА ЛОГИРОВАНИЯ ---
 logging.basicConfig(level=logging.INFO)
 
-# Токен бота из переменной окружения
+# --- ПЕРЕМЕННЫЕ ---
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-
-# Курс USD к RUB
 USD_TO_RUB = 95.0
 
+# --- FLASK ВЕБ-СЕРВЕР (ДЛЯ RENDER) ---
+app_web = Flask(__name__)
+
+@app_web.route('/')
+def index():
+    return "✅ Бот работает!", 200
+
+@app_web.route('/health')
+def health():
+    return "OK", 200
+
+def run_web_server():
+    """Запускает веб-сервер для Render"""
+    port = int(os.environ.get("PORT", 10000))
+    app_web.run(host="0.0.0.0", port=port)
+
+# --- ТЕЛЕГРАМ БОТ ---
 # Месяцы на русском
 MONTHS_RU = {
     1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля',
@@ -29,7 +46,6 @@ WEEKDAYS_RU = {
 }
 
 def reset_webhook():
-    """Принудительный сброс вебхука"""
     try:
         bot = Bot(TOKEN)
         bot.delete_webhook()
@@ -147,7 +163,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     await update.message.reply_text("🔍 Ищу билеты... Это займет несколько секунд.")
     try:
-        # --- ПАРСИНГ ЗАПРОСА ---
         delimiters = ["→", "->", "-", "—", "–"]
         query_parts = None
         for delim in delimiters:
@@ -175,7 +190,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         from_city, to_city, date = query_parts
 
-        # --- ПОИСК БИЛЕТОВ ---
         query = create_query(
             flights=[FlightQuery(date=date, from_airport=from_city, to_airport=to_city)],
             seat="economy",
@@ -189,13 +203,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.")
             return
 
-        # --- ПАРСИНГ ДАННЫХ ---
         flights_data = parse_flight_data(result)
         if not flights_data:
             await update.message.reply_text("❌ Не удалось получить детали рейсов.")
             return
 
-        # --- ФОРМИРОВАНИЕ ОТВЕТА ---
         response = f"✈️ Найдено {len(flights_data)} вариантов:\n\n"
         for i, flight in enumerate(flights_data[:10], 1):
             price_usd = flight['price_usd']
@@ -221,16 +233,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
-def main():
-    # Принудительный сброс вебхука при запуске
+def run_bot():
+    """Запускает Telegram бота"""
     reset_webhook()
-    
-    # Запуск бота
-    app = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app_bot = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).build()
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("✅ Бот запущен и готов к работе!")
-    app.run_polling()
+    app_bot.run_polling()
 
 if __name__ == "__main__":
-    main()
+    # Запускаем веб-сервер в отдельном потоке
+    web_thread = threading.Thread(target=run_web_server)
+    web_thread.daemon = True
+    web_thread.start()
+    
+    # Запускаем бота в основном потоке
+    run_bot()
