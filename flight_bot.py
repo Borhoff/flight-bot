@@ -1,3 +1,4 @@
+
 import os
 import logging
 import re
@@ -779,4 +780,52 @@ async def handle_manual_search(update: Update, text, context):
             response += "💰 *Самый дешевый*\n"
             response += format_flight_card(cheapest) + "\n\n"
         if fastest:
-           
+            response += "⚡ *Самый быстрый*\n"
+            response += format_flight_card(fastest) + "\n\n"
+        response += "💡 Для покупки перейдите на сайт авиакомпании."
+        
+        await update.message.reply_text(response, parse_mode="Markdown")
+        context.user_data.clear()
+        await update.message.reply_text(
+            "✈️ Поиск завершен! Нажмите *«Начать поиск»* для нового поиска.",
+            parse_mode="Markdown",
+            reply_markup=get_main_keyboard()
+        )
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+
+# --- ЗАПУСК БОТА ---
+def run_bot():
+    reset_webhook()
+    
+    while True:
+        try:
+            print("🚀 Запуск бота...")
+            app = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).build()
+            app.add_handler(CommandHandler("start", start))
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+            app.add_handler(CallbackQueryHandler(callback_handler))
+            print("✅ Бот запущен и готов к работе!")
+            app.run_polling()
+        except Exception as e:
+            print(f"❌ Бот упал с ошибкой: {e}")
+            print("🔄 Перезапуск через 5 секунд...")
+            time.sleep(5)
+
+# --- ГЛАВНЫЙ ЗАПУСК ---
+if __name__ == "__main__":
+    init_db()
+    
+    # Запускаем Flask в отдельном потоке
+    web_thread = threading.Thread(target=run_web_server)
+    web_thread.daemon = True
+    web_thread.start()
+    
+    # Запускаем автопинг в отдельном потоке
+    ping_thread = threading.Thread(target=keep_alive)
+    ping_thread.daemon = True
+    ping_thread.start()
+    
+    # Запускаем бота
+    run_bot()
