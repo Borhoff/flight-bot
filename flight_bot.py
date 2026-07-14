@@ -3,6 +3,7 @@ import logging
 import re
 import json
 import threading
+import time
 import sqlite3
 from datetime import datetime, timedelta
 from flask import Flask
@@ -28,7 +29,7 @@ def health():
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
-    app_web.run(host="0.0.0.0", port=port, debug=False)
+    app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
 # --- БАЗА ДАННЫХ SQLITE ---
 def init_db():
@@ -527,7 +528,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Неправильный формат. Используй: ГГГГ-ММ-ДД")
     
     else:
-        # Ручной поиск
         await handle_manual_search(update, text, context)
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -709,7 +709,6 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text(f"❌ Ошибка: {str(e)}")
 
 async def handle_manual_search(update: Update, text, context):
-    """Обработка ручного ввода"""
     try:
         parts = text.split("→")
         if len(parts) != 2:
@@ -733,7 +732,6 @@ async def handle_manual_search(update: Update, text, context):
         context.user_data['to_city'] = to_city
         context.user_data['date'] = date
         
-        # Имитация perform_search для ручного ввода
         user_id = update.effective_user.id
         await update.message.reply_text("🔍 Ищу билеты... Это займет несколько секунд.")
         
@@ -783,19 +781,29 @@ async def handle_manual_search(update: Update, text, context):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
-# --- ГЛАВНАЯ ФУНКЦИЯ ---
+# --- ЗАПУСК БОТА С ЗАЩИТОЙ ОТ ПАДЕНИЙ ---
 def run_bot():
     reset_webhook()
-    app = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    print("✅ Бот запущен и готов к работе!")
-    app.run_polling()
+    
+    while True:
+        try:
+            print("🚀 Запуск бота...")
+            app = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).build()
+            app.add_handler(CommandHandler("start", start))
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+            app.add_handler(CallbackQueryHandler(callback_handler))
+            print("✅ Бот запущен и готов к работе!")
+            app.run_polling()
+        except Exception as e:
+            print(f"❌ Бот упал с ошибкой: {e}")
+            print("🔄 Перезапуск через 5 секунд...")
+            time.sleep(5)
 
 if __name__ == "__main__":
     init_db()
+    # Запускаем Flask в отдельном потоке
     web_thread = threading.Thread(target=run_web_server)
     web_thread.daemon = True
     web_thread.start()
+    # Запускаем бота с автоперезапуском
     run_bot()
