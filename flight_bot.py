@@ -5,6 +5,7 @@ import json
 import threading
 import time
 import sqlite3
+import requests
 from datetime import datetime, timedelta
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
@@ -30,6 +31,18 @@ def health():
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
     app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
+# --- АВТОПИНГ (чтобы бот не засыпал) ---
+def keep_alive():
+    """Пинговать себя каждые 10 минут, чтобы Render не усыплял"""
+    url = "http://localhost:10000/"
+    while True:
+        try:
+            requests.get(url, timeout=5)
+            print("💓 Пинг отправлен, бот активен")
+        except Exception as e:
+            print(f"⚠️ Ошибка пинга: {e}")
+        time.sleep(600)  # 10 минут
 
 # --- БАЗА ДАННЫХ SQLITE ---
 def init_db():
@@ -766,44 +779,4 @@ async def handle_manual_search(update: Update, text, context):
             response += "💰 *Самый дешевый*\n"
             response += format_flight_card(cheapest) + "\n\n"
         if fastest:
-            response += "⚡ *Самый быстрый*\n"
-            response += format_flight_card(fastest) + "\n\n"
-        response += "💡 Для покупки перейдите на сайт авиакомпании."
-        
-        await update.message.reply_text(response, parse_mode="Markdown")
-        context.user_data.clear()
-        await update.message.reply_text(
-            "✈️ Поиск завершен! Нажмите *«Начать поиск»* для нового поиска.",
-            parse_mode="Markdown",
-            reply_markup=get_main_keyboard()
-        )
-        
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
-
-# --- ЗАПУСК БОТА С ЗАЩИТОЙ ОТ ПАДЕНИЙ ---
-def run_bot():
-    reset_webhook()
-    
-    while True:
-        try:
-            print("🚀 Запуск бота...")
-            app = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).build()
-            app.add_handler(CommandHandler("start", start))
-            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-            app.add_handler(CallbackQueryHandler(callback_handler))
-            print("✅ Бот запущен и готов к работе!")
-            app.run_polling()
-        except Exception as e:
-            print(f"❌ Бот упал с ошибкой: {e}")
-            print("🔄 Перезапуск через 5 секунд...")
-            time.sleep(5)
-
-if __name__ == "__main__":
-    init_db()
-    # Запускаем Flask в отдельном потоке
-    web_thread = threading.Thread(target=run_web_server)
-    web_thread.daemon = True
-    web_thread.start()
-    # Запускаем бота с автоперезапуском
-    run_bot()
+           
