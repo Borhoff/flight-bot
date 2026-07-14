@@ -32,11 +32,8 @@ def run_web_server():
 
 # --- БАЗА ДАННЫХ SQLITE ---
 def init_db():
-    """Инициализация базы данных"""
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    
-    # Таблица пользователей
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -47,8 +44,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
-    # Таблица истории запросов
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS search_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,18 +55,15 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
     conn.commit()
     conn.close()
 
 def get_user_preferences(user_id):
-    """Получает настройки пользователя"""
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute('SELECT priority, max_stops, preferred_hours, avoid_airports FROM users WHERE user_id = ?', (user_id,))
     row = cursor.fetchone()
     conn.close()
-    
     if row:
         return {
             'priority': row[0],
@@ -82,7 +74,6 @@ def get_user_preferences(user_id):
     return {'priority': 'balance', 'max_stops': 2, 'preferred_hours': '6-23', 'avoid_airports': ''}
 
 def save_user_preferences(user_id, preferences):
-    """Сохраняет настройки пользователя"""
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -96,7 +87,6 @@ def save_user_preferences(user_id, preferences):
     conn.close()
 
 def save_search_history(user_id, from_city, to_city, date, result):
-    """Сохраняет историю поиска"""
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -107,7 +97,6 @@ def save_search_history(user_id, from_city, to_city, date, result):
     conn.close()
 
 def get_search_history(user_id, limit=10):
-    """Получает историю поиска пользователя"""
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute('''
@@ -185,7 +174,8 @@ def parse_single_flight(seg_str):
     result = {
         'from_airport': 'N/A', 'from_code': 'N/A',
         'to_airport': 'N/A', 'to_code': 'N/A',
-        'departure': 'N/A', 'arrival': 'N/A', 'duration': 'N/A'
+        'departure': 'N/A', 'arrival': 'N/A', 'duration': 'N/A',
+        'departure_hour': 12
     }
     try:
         from_match = re.search(r"from_airport=Airport\(name='([^']+)', code='([^']+)'\)", seg_str)
@@ -243,18 +233,13 @@ def parse_flight_data(result):
             continue
     return flights_data
 
-# --- СИСТЕМА ОЦЕНКИ РЕЙСОВ ---
+# --- СИСТЕМА ОЦЕНКИ ---
 def rate_flight(flight, user_preferences):
-    """
-    Оценивает рейс по шкале 0-100
-    Учитывает: цену, время, пересадки, комфорт
-    """
     score = 0
     price = flight['price_usd']
     stops = flight['stops']
     total_duration = flight['total_duration']
     
-    # Цена (чем дешевле, тем лучше)
     if price < 200:
         score += 30
     elif price < 400:
@@ -266,7 +251,6 @@ def rate_flight(flight, user_preferences):
     else:
         score += 10
     
-    # Пересадки (чем меньше, тем лучше)
     if stops == 0:
         score += 30
     elif stops == 1:
@@ -276,53 +260,34 @@ def rate_flight(flight, user_preferences):
     else:
         score += 5
     
-    # Время вылета (удобное время)
-    first_segment = flight['segments'][0]
-    dep_hour = first_segment.get('departure_hour', 12)
-    preferred_hours = user_preferences.get('preferred_hours', '6-23')
-    try:
-        pref_start, pref_end = map(int, preferred_hours.split('-'))
-        if pref_start <= dep_hour <= pref_end:
-            score += 20
-        elif 6 <= dep_hour <= 22:
-            score += 10
-        else:
-            score += 5
-    except:
+    if len(flight['segments']) > 0:
+        dep_hour = flight['segments'][0].get('departure_hour', 12)
         if 8 <= dep_hour <= 20:
             score += 15
         else:
             score += 5
     
-    # Время в пути
-    if total_duration < 180:  # до 3 часов
+    if total_duration < 180:
         score += 20
-    elif total_duration < 360:  # до 6 часов
+    elif total_duration < 360:
         score += 15
-    elif total_duration < 600:  # до 10 часов
+    elif total_duration < 600:
         score += 10
     else:
         score += 5
     
-    # Учет приоритета пользователя
     priority = user_preferences.get('priority', 'balance')
     if priority == 'price':
-        # Цена важнее
         score = score * 0.6 + max(0, (100 - price / 5)) * 0.4
     elif priority == 'speed':
-        # Скорость важнее
         score = score * 0.6 + max(0, (100 - total_duration / 6)) * 0.4
     elif priority == 'comfort':
-        # Комфорт важнее (меньше пересадок и удобное время)
         comfort_score = 100 - stops * 20
-        if 8 <= dep_hour <= 20:
-            comfort_score += 10
         score = score * 0.5 + comfort_score * 0.5
     
     return min(100, max(0, score))
 
 def format_flight_card(flight, index=None):
-    """Форматирует одну карточку рейса"""
     price_usd = flight['price_usd']
     price_rub = int(price_usd * USD_TO_RUB) if price_usd != 'N/A' else 'N/A'
     
@@ -350,29 +315,47 @@ def format_flight_card(flight, index=None):
     return card
 
 def get_best_flights(flights_data, user_preferences):
-    """
-    Возвращает три варианта:
-    1. Рекомендованный (по оценке)
-    2. Самый дешевый
-    3. Самый быстрый
-    """
     if not flights_data:
         return None, None, None
     
-    # Оцениваем каждый рейс
     for flight in flights_data:
         flight['score'] = rate_flight(flight, user_preferences)
     
-    # Сортируем по разным критериям
     best_overall = max(flights_data, key=lambda x: x['score'])
     cheapest = min(flights_data, key=lambda x: x['price_usd'])
     fastest = min(flights_data, key=lambda x: x['total_duration'])
     
     return best_overall, cheapest, fastest
 
+def get_reason(flight, prefs):
+    reasons = []
+    if flight['stops'] == 0:
+        reasons.append("✈️ прямой рейс без пересадок")
+    elif flight['stops'] == 1:
+        reasons.append("🔄 только 1 пересадка")
+    price = flight['price_usd']
+    if price < 300:
+        reasons.append("💰 отличная цена")
+    elif price < 500:
+        reasons.append("💰 хорошая цена")
+    duration = flight['total_duration']
+    if duration < 180:
+        reasons.append("⚡ очень быстро")
+    elif duration < 360:
+        reasons.append("⚡ быстро")
+    priority = prefs.get('priority', 'balance')
+    if priority == 'price':
+        reasons.append("📊 лучшая цена среди вариантов")
+    elif priority == 'speed':
+        reasons.append("📊 самый быстрый вариант")
+    elif priority == 'comfort':
+        reasons.append("📊 оптимальный комфорт")
+    else:
+        reasons.append("📊 оптимальный баланс цены и комфорта")
+    return "✅ " + ", ".join(reasons[:3])
+
 # --- КНОПКИ И ИНТЕРФЕЙС ---
 def get_main_keyboard():
-    """Главное меню с кнопками"""
     buttons = [
         [KeyboardButton("✈️ Начать поиск")],
         [KeyboardButton("⚙️ Настройки"), KeyboardButton("📊 История")],
@@ -381,7 +364,6 @@ def get_main_keyboard():
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 def get_city_keyboard():
-    """Кнопки для выбора города"""
     buttons = []
     row = []
     for i, (name, code) in enumerate(CITIES.items()):
@@ -391,12 +373,11 @@ def get_city_keyboard():
             row = []
     if row:
         buttons.append(row)
-    # Кнопка "Ввести вручную"
-    buttons.append([InlineKeyboardButton("✏️ Ввести IATA-код вручную", callback_data="manual_city")])
+    buttons.append([InlineKeyboardButton("✏️ Ввести вручную", callback_data="manual_city")])
+    buttons.append([InlineKeyboardButton("✈️ Популярные маршруты", callback_data="popular_routes")])
     return InlineKeyboardMarkup(buttons)
 
 def get_date_keyboard():
-    """Быстрый выбор даты"""
     today = datetime.now().date()
     buttons = [
         [InlineKeyboardButton(f"📅 Сегодня ({today.strftime('%d.%m')})", callback_data=f"date_{today.strftime('%Y-%m-%d')}")],
@@ -407,7 +388,6 @@ def get_date_keyboard():
     return InlineKeyboardMarkup(buttons)
 
 def get_settings_keyboard():
-    """Кнопки настроек"""
     buttons = [
         [InlineKeyboardButton("💰 Приоритет: цена", callback_data="priority_price")],
         [InlineKeyboardButton("⚡ Приоритет: скорость", callback_data="priority_speed")],
@@ -419,7 +399,6 @@ def get_settings_keyboard():
     return InlineKeyboardMarkup(buttons)
 
 def get_popular_routes():
-    """Популярные маршруты для быстрого выбора"""
     routes = [
         ("LHR", "JFK"),
         ("CDG", "DXB"),
@@ -439,6 +418,9 @@ def get_popular_routes():
 
 # --- ОБРАБОТЧИКИ ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    init_db()
+    user_id = update.effective_user.id
+    get_user_preferences(user_id)
     await update.message.reply_text(
         "✈️ *Добро пожаловать в бот поиска авиабилетов!*\n\n"
         "Я помогу найти лучшие цены на билеты по всему миру.\n"
@@ -450,13 +432,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
         reply_markup=get_main_keyboard()
     )
-    
-    # Инициализация базы данных
-    init_db()
-    
-    # Сохраняем пользователя
-    user_id = update.effective_user.id
-    get_user_preferences(user_id)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -497,13 +472,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not history:
             await update.message.reply_text("📊 У вас пока нет истории поиска.")
             return
-        
         response = "📊 *Ваша история поиска:*\n\n"
         for from_city, to_city, date, created_at in history[:10]:
             created = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S.%f")
             response += f"✈️ {from_city} → {to_city} на {date}\n"
             response += f"   ⏱ {created.strftime('%d.%m.%Y %H:%M')}\n\n"
-        
         await update.message.reply_text(response, parse_mode="Markdown")
     
     elif text == "❓ Помощь":
@@ -529,7 +502,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_data['state'] = 'to_city'
                 await update.message.reply_text(
                     f"✅ Выбран вылет: *{text}*\n\n"
-                    "🌍 *Куда летим?*\nВыберите город или введите IATA-код:",
+                    "🌍 *Куда летим?*\nВыберите город:",
                     parse_mode="Markdown",
                     reply_markup=get_city_keyboard()
                 )
@@ -551,12 +524,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ Выбрана дата: *{text}*", parse_mode="Markdown")
             await perform_search(update, context)
         else:
-            await update.message.reply_text("❌ Неправильный формат. Используй: ГГГГ-ММ-ДД (например, 2026-07-20)")
+            await update.message.reply_text("❌ Неправильный формат. Используй: ГГГГ-ММ-ДД")
     
     else:
-        # Пробуем распарсить ручной запрос
-        await update.message.reply_text("🔍 Ищу билеты...")
-        await handle_manual_search(update, text)
+        # Ручной поиск
+        await handle_manual_search(update, text, context)
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -566,11 +538,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if data == "back_to_main":
-        await query.edit_message_text(
-            "✈️ *Главное меню*\n\nВыберите действие:",
-            parse_mode="Markdown"
-        )
-        await query.message.reply_text("👇 Нажмите кнопку:", reply_markup=get_main_keyboard())
+        await query.edit_message_text("✈️ *Главное меню*", parse_mode="Markdown")
+        await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
     
     elif data == "manual_city":
@@ -578,14 +547,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_data.get('state') == 'from_city' or not user_data.get('from_city'):
             user_data['city_type'] = 'from'
             await query.edit_message_text(
-                "✏️ Введите IATA-код города вылета (3 буквы):\n"
+                "✏️ Введите IATA-код *города вылета* (3 буквы):\n"
                 "Например: *LHR*, *JFK*, *CDG*",
                 parse_mode="Markdown"
             )
         else:
             user_data['city_type'] = 'to'
             await query.edit_message_text(
-                "✏️ Введите IATA-код города прибытия (3 буквы):\n"
+                "✏️ Введите IATA-код *города прибытия* (3 буквы):\n"
                 "Например: *LHR*, *JFK*, *CDG*",
                 parse_mode="Markdown"
             )
@@ -600,8 +569,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    elif data == "popular_routes":
+        await query.edit_message_text(
+            "✈️ *Популярные маршруты*\n\n"
+            "Выберите маршрут для быстрого поиска:",
+            parse_mode="Markdown",
+            reply_markup=get_popular_routes()
+        )
+        return
+    
     elif data.startswith("route_"):
-        # Быстрый маршрут
         _, from_city, to_city = data.split("_")
         user_data['from_city'] = from_city
         user_data['to_city'] = to_city
@@ -648,7 +625,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prefs = get_user_preferences(user_id)
         prefs['priority'] = priority
         save_user_preferences(user_id, prefs)
-        
         priority_names = {
             'price': '💰 Цена',
             'speed': '⚡ Скорость',
@@ -666,26 +642,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "reset_settings":
         save_user_preferences(user_id, {'priority': 'balance', 'max_stops': 2, 'preferred_hours': '6-23', 'avoid_airports': ''})
         await query.edit_message_text(
-            "✅ *Настройки сброшены до стандартных*\n\n"
-            "Приоритет: Баланс\n"
-            "Максимум пересадок: 2\n"
-            "Удобное время: 6:00 - 23:00",
+            "✅ *Настройки сброшены до стандартных*",
             parse_mode="Markdown"
         )
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
-    
-    elif data == "popular_routes":
-        await query.edit_message_text(
-            "✈️ *Популярные маршруты*\n\n"
-            "Выберите маршрут для быстрого поиска:",
-            parse_mode="Markdown",
-            reply_markup=get_popular_routes()
-        )
-        return
 
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Выполняет поиск и показывает 3 варианта"""
     user_data = context.user_data
     user_id = update.effective_user.id
     from_city = user_data.get('from_city')
@@ -693,20 +656,12 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date = user_data.get('date')
     
     if not from_city or not to_city or not date:
-        if hasattr(update, 'callback_query'):
-            await update.callback_query.edit_message_text("❌ Не все данные введены. Начните заново.")
-        else:
-            await update.message.reply_text("❌ Не все данные введены. Нажмите «Начать поиск».")
+        await update.callback_query.edit_message_text("❌ Не все данные введены. Начните заново.")
         return
     
     try:
-        if hasattr(update, 'callback_query'):
-            await update.callback_query.edit_message_text("🔍 Ищу билеты... Это займет несколько секунд.")
-            send_func = update.callback_query.edit_message_text
-        else:
-            send_func = update.message.reply_text
+        await update.callback_query.edit_message_text("🔍 Ищу билеты... Это займет несколько секунд.")
         
-        # Поиск билетов
         q = create_query(
             flights=[FlightQuery(date=date, from_airport=from_city, to_airport=to_city)],
             seat="economy",
@@ -717,88 +672,43 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = get_flights(q)
         
         if not result or len(result) == 0:
-            await send_func(f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.")
+            await update.callback_query.edit_message_text(f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.")
             return
         
-        # Парсим данные
         flights_data = parse_flight_data(result)
         if not flights_data:
-            await send_func("❌ Не удалось получить детали рейсов.")
+            await update.callback_query.edit_message_text("❌ Не удалось получить детали рейсов.")
             return
         
-        # Получаем предпочтения пользователя
         prefs = get_user_preferences(user_id)
-        
-        # Находим три варианта
         best_overall, cheapest, fastest = get_best_flights(flights_data, prefs)
-        
-        # Сохраняем в историю
         save_search_history(user_id, from_city, to_city, date, flights_data[:5])
         
-        # Формируем ответ
         response = "✈️ *Результаты поиска:*\n\n"
-        
         if best_overall:
             response += "⭐ *Лучший вариант (рекомендованный)*\n"
             response += format_flight_card(best_overall) + "\n"
             response += f"📌 *Почему:* {get_reason(best_overall, prefs)}\n\n"
-        
         if cheapest:
             response += "💰 *Самый дешевый*\n"
             response += format_flight_card(cheapest) + "\n\n"
-        
         if fastest:
             response += "⚡ *Самый быстрый*\n"
             response += format_flight_card(fastest) + "\n\n"
-        
         response += "💡 Для покупки перейдите на сайт авиакомпании."
         
-        await send_func(response, parse_mode="Markdown")
-        
-        # Сбрасываем состояние
+        await update.callback_query.edit_message_text(response, parse_mode="Markdown")
         user_data.clear()
-        await send_func("✈️ Поиск завершен! Нажмите *«Начать поиск»* для нового поиска.", parse_mode="Markdown", reply_markup=get_main_keyboard())
+        await update.callback_query.message.reply_text(
+            "✈️ Поиск завершен! Нажмите *«Начать поиск»* для нового поиска.",
+            parse_mode="Markdown",
+            reply_markup=get_main_keyboard()
+        )
         
     except Exception as e:
-        if hasattr(update, 'callback_query'):
-            await update.callback_query.edit_message_text(f"❌ Ошибка: {str(e)}")
-        else:
-            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        await update.callback_query.edit_message_text(f"❌ Ошибка: {str(e)}")
 
-def get_reason(flight, prefs):
-    """Объясняет, почему выбран этот рейс"""
-    reasons = []
-    
-    if flight['stops'] == 0:
-        reasons.append("✈️ прямой рейс без пересадок")
-    elif flight['stops'] == 1:
-        reasons.append("🔄 только 1 пересадка")
-    
-    price = flight['price_usd']
-    if price < 300:
-        reasons.append("💰 отличная цена")
-    elif price < 500:
-        reasons.append("💰 хорошая цена")
-    
-    duration = flight['total_duration']
-    if duration < 180:
-        reasons.append("⚡ очень быстро")
-    elif duration < 360:
-        reasons.append("⚡ быстро")
-    
-    priority = prefs.get('priority', 'balance')
-    if priority == 'price':
-        reasons.append("📊 лучшая цена среди вариантов")
-    elif priority == 'speed':
-        reasons.append("📊 самый быстрый вариант")
-    elif priority == 'comfort':
-        reasons.append("📊 оптимальный комфорт")
-    else:
-        reasons.append("📊 оптимальный баланс цены и комфорта")
-    
-    return "✅ " + ", ".join(reasons[:3])
-
-async def handle_manual_search(update: Update, text):
+async def handle_manual_search(update: Update, text, context):
     """Обработка ручного ввода"""
     try:
         parts = text.split("→")
@@ -822,7 +732,53 @@ async def handle_manual_search(update: Update, text):
         context.user_data['from_city'] = from_city
         context.user_data['to_city'] = to_city
         context.user_data['date'] = date
-        await perform_search(update, context)
+        
+        # Имитация perform_search для ручного ввода
+        user_id = update.effective_user.id
+        await update.message.reply_text("🔍 Ищу билеты... Это займет несколько секунд.")
+        
+        q = create_query(
+            flights=[FlightQuery(date=date, from_airport=from_city, to_airport=to_city)],
+            seat="economy",
+            trip="one-way",
+            passengers=Passengers(adults=1),
+            language="en-US",
+        )
+        result = get_flights(q)
+        
+        if not result or len(result) == 0:
+            await update.message.reply_text(f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.")
+            return
+        
+        flights_data = parse_flight_data(result)
+        if not flights_data:
+            await update.message.reply_text("❌ Не удалось получить детали рейсов.")
+            return
+        
+        prefs = get_user_preferences(user_id)
+        best_overall, cheapest, fastest = get_best_flights(flights_data, prefs)
+        save_search_history(user_id, from_city, to_city, date, flights_data[:5])
+        
+        response = "✈️ *Результаты поиска:*\n\n"
+        if best_overall:
+            response += "⭐ *Лучший вариант (рекомендованный)*\n"
+            response += format_flight_card(best_overall) + "\n"
+            response += f"📌 *Почему:* {get_reason(best_overall, prefs)}\n\n"
+        if cheapest:
+            response += "💰 *Самый дешевый*\n"
+            response += format_flight_card(cheapest) + "\n\n"
+        if fastest:
+            response += "⚡ *Самый быстрый*\n"
+            response += format_flight_card(fastest) + "\n\n"
+        response += "💡 Для покупки перейдите на сайт авиакомпании."
+        
+        await update.message.reply_text(response, parse_mode="Markdown")
+        context.user_data.clear()
+        await update.message.reply_text(
+            "✈️ Поиск завершен! Нажмите *«Начать поиск»* для нового поиска.",
+            parse_mode="Markdown",
+            reply_markup=get_main_keyboard()
+        )
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
@@ -831,20 +787,14 @@ async def handle_manual_search(update: Update, text):
 def run_bot():
     reset_webhook()
     app = Application.builder().token(TOKEN).connect_timeout(60).read_timeout(60).build()
-    
-    # Обработчики
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    
     print("✅ Бот запущен и готов к работе!")
     app.run_polling()
 
 if __name__ == "__main__":
-    # Инициализация базы данных
     init_db()
-    
-    # Запускаем веб-сервер для Render
     web_thread = threading.Thread(target=run_web_server)
     web_thread.daemon = True
     web_thread.start()
