@@ -12,7 +12,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
 
-# --- НАСТРОЙКА ЛОГГИРОВАНИЯ ---
+# --- НАСТРОЙКА ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -52,8 +52,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             priority TEXT DEFAULT 'balance',
-            max_stops INTEGER DEFAULT 2,
-            preferred_hours TEXT DEFAULT '6-23',
+            max_stops INTEGER DEFAULT 3,
+            preferred_hours TEXT DEFAULT 'all',
             avoid_airports TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -87,7 +87,7 @@ def get_user_preferences(user_id):
             'preferred_hours': row[2],
             'avoid_airports': row[3]
         }
-    return {'priority': 'balance', 'max_stops': 2, 'preferred_hours': '6-23', 'avoid_airports': ''}
+    return {'priority': 'balance', 'max_stops': 3, 'preferred_hours': 'all', 'avoid_airports': ''}
 
 def save_user_preferences(user_id, preferences):
     conn = sqlite3.connect('users.db')
@@ -95,9 +95,10 @@ def save_user_preferences(user_id, preferences):
     cursor.execute('''
         INSERT OR REPLACE INTO users (user_id, priority, max_stops, preferred_hours, avoid_airports)
         VALUES (?, ?, ?, ?, ?)
-    ''', (user_id, preferences.get('priority', 'balance'),
-          preferences.get('max_stops', 2),
-          preferences.get('preferred_hours', '6-23'),
+    ''', (user_id, 
+          preferences.get('priority', 'balance'),
+          preferences.get('max_stops', 3),
+          preferences.get('preferred_hours', 'all'),
           preferences.get('avoid_airports', '')))
     conn.commit()
     conn.close()
@@ -277,13 +278,14 @@ def parse_flight_data(result):
             continue
     return flights_data
 
-# --- СИСТЕМА ОЦЕНКИ ---
+# --- СИСТЕМА ОЦЕНКИ с учетом настроек ---
 def rate_flight(flight, user_preferences):
     score = 0
     price = flight['price_usd']
     stops = flight['stops']
     total_duration = flight['total_duration']
     
+    # Цена
     if price < 200:
         score += 30
     elif price < 400:
@@ -295,22 +297,45 @@ def rate_flight(flight, user_preferences):
     else:
         score += 10
     
-    if stops == 0:
-        score += 30
-    elif stops == 1:
-        score += 20
-    elif stops == 2:
-        score += 10
-    else:
-        score += 5
-    
-    if len(flight['segments']) > 0:
-        dep_hour = flight['segments'][0].get('departure_hour', 12)
-        if 8 <= dep_hour <= 20:
-            score += 15
+    # Пересадки (с учетом max_stops)
+    max_stops = user_preferences.get('max_stops', 3)
+    if stops <= max_stops:
+        if stops == 0:
+            score += 30
+        elif stops == 1:
+            score += 20
+        elif stops == 2:
+            score += 10
         else:
             score += 5
+    else:
+        score -= 10  # Штраф за превышение лимита пересадок
     
+    # Время вылета (с учетом preferred_hours)
+    if len(flight['segments']) > 0:
+        dep_hour = flight['segments'][0].get('departure_hour', 12)
+        pref_hours = user_preferences.get('preferred_hours', 'all')
+        
+        if pref_hours == 'morning' and 6 <= dep_hour <= 12:
+            score += 20
+        elif pref_hours == 'day' and 12 <= dep_hour <= 18:
+            score += 20
+        elif pref_hours == 'evening' and 18 <= dep_hour <= 23:
+            score += 20
+        elif pref_hours == 'night' and 23 <= dep_hour <= 6:
+            score += 20
+        elif pref_hours == 'all':
+            if 8 <= dep_hour <= 20:
+                score += 15
+            else:
+                score += 5
+        else:
+            if 8 <= dep_hour <= 20:
+                score += 15
+            else:
+                score += 5
+    
+    # Время в пути
     if total_duration < 180:
         score += 20
     elif total_duration < 360:
@@ -320,6 +345,7 @@ def rate_flight(flight, user_preferences):
     else:
         score += 5
     
+    # Приоритет пользователя
     priority = user_preferences.get('priority', 'balance')
     if priority == 'price':
         score = score * 0.6 + max(0, (100 - price / 5)) * 0.4
@@ -362,12 +388,19 @@ def get_best_flights(flights_data, user_preferences):
     if not flights_data:
         return None, None, None
     
-    for flight in flights_data:
+    # Фильтруем по max_stops
+    max_stops = user_preferences.get('max_stops', 3)
+    filtered = [f for f in flights_data if f['stops'] <= max_stops]
+    
+    if not filtered:
+        filtered = flights_data
+    
+    for flight in filtered:
         flight['score'] = rate_flight(flight, user_preferences)
     
-    best_overall = max(flights_data, key=lambda x: x['score'])
-    cheapest = min(flights_data, key=lambda x: x['price_usd'])
-    fastest = min(flights_data, key=lambda x: x['total_duration'])
+    best_overall = max(filtered, key=lambda x: x['score']) if filtered else None
+    cheapest = min(filtered, key=lambda x: x['price_usd']) if filtered else None
+    fastest = min(filtered, key=lambda x: x['total_duration']) if filtered else None
     
     return best_overall, cheapest, fastest
 
@@ -431,14 +464,72 @@ def get_date_keyboard():
     ]
     return InlineKeyboardMarkup(buttons)
 
-def get_settings_keyboard():
+def get_settings_keyboard(user_id):
+    """Создает клавиатуру настроек с текущими значениями"""
+    prefs = get_user_preferences(user_id)
+    priority = prefs.get('priority', 'balance')
+    max_stops = prefs.get('max_stops', 3)
+    pref_hours = prefs.get('preferred_hours', 'all')
+    
+    priority_names = {
+        'price': '💰 Цена',
+        'speed': '⚡ Скорость',
+        'comfort': '⭐ Комфорт',
+        'balance': '⚖️ Баланс'
+    }
+    
+    stops_names = {
+        0: '🟢 Прямые',
+        1: '🟡 1 пересадка',
+        2: '🟠 2 пересадки',
+        3: '🔵 Любые'
+    }
+    
+    hours_names = {
+        'morning': '🌅 Утро (6-12)',
+        'day': '☀️ День (12-18)',
+        'evening': '🌆 Вечер (18-23)',
+        'night': '🌙 Ночь (23-6)',
+        'all': '🕐 Любое время'
+    }
+    
     buttons = [
-        [InlineKeyboardButton("💰 Приоритет: цена", callback_data="priority_price")],
-        [InlineKeyboardButton("⚡ Приоритет: скорость", callback_data="priority_speed")],
-        [InlineKeyboardButton("⭐ Приоритет: комфорт", callback_data="priority_comfort")],
-        [InlineKeyboardButton("⚖️ Приоритет: баланс", callback_data="priority_balance")],
+        [InlineKeyboardButton(f"🎯 Приоритет: {priority_names.get(priority, 'Баланс')}", callback_data="settings_priority")],
+        [InlineKeyboardButton(f"🔄 Пересадки: {stops_names.get(max_stops, 'Любые')}", callback_data="settings_stops")],
+        [InlineKeyboardButton(f"⏰ Время: {hours_names.get(pref_hours, 'Любое')}", callback_data="settings_hours")],
         [InlineKeyboardButton("🔄 Сбросить настройки", callback_data="reset_settings")],
         [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+def get_priority_keyboard():
+    buttons = [
+        [InlineKeyboardButton("💰 Цена", callback_data="priority_price")],
+        [InlineKeyboardButton("⚡ Скорость", callback_data="priority_speed")],
+        [InlineKeyboardButton("⭐ Комфорт", callback_data="priority_comfort")],
+        [InlineKeyboardButton("⚖️ Баланс", callback_data="priority_balance")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="settings_back")]
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+def get_stops_keyboard():
+    buttons = [
+        [InlineKeyboardButton("🟢 Прямые (0)", callback_data="stops_0")],
+        [InlineKeyboardButton("🟡 1 пересадка", callback_data="stops_1")],
+        [InlineKeyboardButton("🟠 2 пересадки", callback_data="stops_2")],
+        [InlineKeyboardButton("🔵 Любые", callback_data="stops_3")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="settings_back")]
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+def get_hours_keyboard():
+    buttons = [
+        [InlineKeyboardButton("🌅 Утро (6-12)", callback_data="hours_morning")],
+        [InlineKeyboardButton("☀️ День (12-18)", callback_data="hours_day")],
+        [InlineKeyboardButton("🌆 Вечер (18-23)", callback_data="hours_evening")],
+        [InlineKeyboardButton("🌙 Ночь (23-6)", callback_data="hours_night")],
+        [InlineKeyboardButton("🕐 Любое время", callback_data="hours_all")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="settings_back")]
     ]
     return InlineKeyboardMarkup(buttons)
 
@@ -461,7 +552,6 @@ def get_popular_routes():
     return InlineKeyboardMarkup(buttons)
 
 def get_history_keyboard(user_id):
-    """Создает клавиатуру с историей запросов"""
     history = get_search_history(user_id, limit=10)
     buttons = []
     
@@ -470,14 +560,12 @@ def get_history_keyboard(user_id):
     else:
         for record in history:
             hist_id, from_city, to_city, date, query_text, created_at = record
-            # Форматируем дату для кнопки
             try:
                 created = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S.%f")
                 date_str = created.strftime("%d.%m %H:%M")
             except:
                 date_str = "недавно"
             button_text = f"✈️ {from_city} → {to_city}  {date}  ({date_str})"
-            # Передаем все данные в callback
             callback_data = f"history_{hist_id}_{from_city}_{to_city}_{date}"
             buttons.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     
@@ -521,20 +609,37 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "⚙️ Настройки":
         prefs = get_user_preferences(user_id)
         priority = prefs.get('priority', 'balance')
+        max_stops = prefs.get('max_stops', 3)
+        pref_hours = prefs.get('preferred_hours', 'all')
+        
         priority_names = {
             'price': '💰 Цена',
             'speed': '⚡ Скорость',
             'comfort': '⭐ Комфорт',
             'balance': '⚖️ Баланс'
         }
+        stops_names = {
+            0: '🟢 Прямые',
+            1: '🟡 1 пересадка',
+            2: '🟠 2 пересадки',
+            3: '🔵 Любые'
+        }
+        hours_names = {
+            'morning': '🌅 Утро (6-12)',
+            'day': '☀️ День (12-18)',
+            'evening': '🌆 Вечер (18-23)',
+            'night': '🌙 Ночь (23-6)',
+            'all': '🕐 Любое время'
+        }
+        
         await update.message.reply_text(
             f"⚙️ *Ваши настройки:*\n\n"
-            f"Приоритет: {priority_names.get(priority, 'Баланс')}\n"
-            f"Максимум пересадок: {prefs.get('max_stops', 2)}\n"
-            f"Удобное время: {prefs.get('preferred_hours', '6-23')}\n\n"
-            "Выберите новый приоритет:",
+            f"🎯 Приоритет: {priority_names.get(priority, 'Баланс')}\n"
+            f"🔄 Пересадки: {stops_names.get(max_stops, 'Любые')}\n"
+            f"⏰ Время: {hours_names.get(pref_hours, 'Любое')}\n\n"
+            "Нажмите на параметр, чтобы изменить:",
             parse_mode="Markdown",
-            reply_markup=get_settings_keyboard()
+            reply_markup=get_settings_keyboard(user_id)
         )
     
     elif text == "📊 История":
@@ -605,7 +710,152 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"🔘 Callback: {data} от user {user_id}")
     
-    if data == "back_to_main":
+    # --- НАСТРОЙКИ ---
+    if data == "settings_priority":
+        await query.edit_message_text(
+            "🎯 *Выберите приоритет поиска:*\n\n"
+            "💰 *Цена* — самые дешевые билеты\n"
+            "⚡ *Скорость* — самые быстрые перелеты\n"
+            "⭐ *Комфорт* — минимальное число пересадок\n"
+            "⚖️ *Баланс* — оптимальное сочетание",
+            parse_mode="Markdown",
+            reply_markup=get_priority_keyboard()
+        )
+        return
+    
+    elif data == "settings_stops":
+        await query.edit_message_text(
+            "🔄 *Максимум пересадок:*\n\n"
+            "Выберите допустимое количество пересадок:",
+            parse_mode="Markdown",
+            reply_markup=get_stops_keyboard()
+        )
+        return
+    
+    elif data == "settings_hours":
+        await query.edit_message_text(
+            "⏰ *Удобное время вылета:*\n\n"
+            "Выберите предпочтительное время:",
+            parse_mode="Markdown",
+            reply_markup=get_hours_keyboard()
+        )
+        return
+    
+    elif data == "settings_back":
+        prefs = get_user_preferences(user_id)
+        priority = prefs.get('priority', 'balance')
+        max_stops = prefs.get('max_stops', 3)
+        pref_hours = prefs.get('preferred_hours', 'all')
+        
+        priority_names = {
+            'price': '💰 Цена',
+            'speed': '⚡ Скорость',
+            'comfort': '⭐ Комфорт',
+            'balance': '⚖️ Баланс'
+        }
+        stops_names = {
+            0: '🟢 Прямые',
+            1: '🟡 1 пересадка',
+            2: '🟠 2 пересадки',
+            3: '🔵 Любые'
+        }
+        hours_names = {
+            'morning': '🌅 Утро (6-12)',
+            'day': '☀️ День (12-18)',
+            'evening': '🌆 Вечер (18-23)',
+            'night': '🌙 Ночь (23-6)',
+            'all': '🕐 Любое время'
+        }
+        
+        await query.edit_message_text(
+            f"⚙️ *Ваши настройки:*\n\n"
+            f"🎯 Приоритет: {priority_names.get(priority, 'Баланс')}\n"
+            f"🔄 Пересадки: {stops_names.get(max_stops, 'Любые')}\n"
+            f"⏰ Время: {hours_names.get(pref_hours, 'Любое')}\n\n"
+            "Нажмите на параметр, чтобы изменить:",
+            parse_mode="Markdown",
+            reply_markup=get_settings_keyboard(user_id)
+        )
+        return
+    
+    # --- ПРИОРИТЕТ ---
+    elif data.startswith("priority_"):
+        priority = data.replace("priority_", "")
+        prefs = get_user_preferences(user_id)
+        prefs['priority'] = priority
+        save_user_preferences(user_id, prefs)
+        
+        priority_names = {
+            'price': '💰 Цена',
+            'speed': '⚡ Скорость',
+            'comfort': '⭐ Комфорт',
+            'balance': '⚖️ Баланс'
+        }
+        await query.edit_message_text(
+            f"✅ Приоритет изменен на: *{priority_names.get(priority, priority)}*\n\n"
+            "⚙️ Настройки обновлены!",
+            parse_mode="Markdown"
+        )
+        await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
+        return
+    
+    # --- ПЕРЕСАДКИ ---
+    elif data.startswith("stops_"):
+        stops = int(data.replace("stops_", ""))
+        prefs = get_user_preferences(user_id)
+        prefs['max_stops'] = stops
+        save_user_preferences(user_id, prefs)
+        
+        stops_names = {
+            0: '🟢 Прямые',
+            1: '🟡 1 пересадка',
+            2: '🟠 2 пересадки',
+            3: '🔵 Любые'
+        }
+        await query.edit_message_text(
+            f"✅ Максимум пересадок: *{stops_names.get(stops, 'Любые')}*\n\n"
+            "⚙️ Настройки обновлены!",
+            parse_mode="Markdown"
+        )
+        await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
+        return
+    
+    # --- ВРЕМЯ ---
+    elif data.startswith("hours_"):
+        hours = data.replace("hours_", "")
+        prefs = get_user_preferences(user_id)
+        prefs['preferred_hours'] = hours
+        save_user_preferences(user_id, prefs)
+        
+        hours_names = {
+            'morning': '🌅 Утро (6-12)',
+            'day': '☀️ День (12-18)',
+            'evening': '🌆 Вечер (18-23)',
+            'night': '🌙 Ночь (23-6)',
+            'all': '🕐 Любое время'
+        }
+        await query.edit_message_text(
+            f"✅ Время вылета: *{hours_names.get(hours, 'Любое')}*\n\n"
+            "⚙️ Настройки обновлены!",
+            parse_mode="Markdown"
+        )
+        await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
+        return
+    
+    elif data == "reset_settings":
+        save_user_preferences(user_id, {'priority': 'balance', 'max_stops': 3, 'preferred_hours': 'all', 'avoid_airports': ''})
+        await query.edit_message_text(
+            "✅ *Настройки сброшены до стандартных*\n\n"
+            "🎯 Приоритет: Баланс\n"
+            "🔄 Пересадки: Любые\n"
+            "⏰ Время: Любое",
+            parse_mode="Markdown"
+        )
+        await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
+        return
+    
+    # --- ОСТАЛЬНЫЕ CALLBACK-И ---
+    elif data == "back_to_main":
         await query.edit_message_text("✈️ *Главное меню*", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
@@ -657,7 +907,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     elif data.startswith("history_"):
-        # Формат: history_id_from_to_date
         parts = data.split("_")
         if len(parts) >= 5:
             hist_id = parts[1]
@@ -666,8 +915,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             date = parts[4]
             
             logger.info(f"🔄 Повтор поиска из истории: {from_city} → {to_city} {date}")
-            
-            # Сохраняем в user_data и запускаем поиск
             user_data['from_city'] = from_city
             user_data['to_city'] = to_city
             user_data['date'] = date
@@ -717,34 +964,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"✅ Выбрана дата: *{date}*", parse_mode="Markdown")
         await perform_search(update, context)
         return
-    
-    elif data.startswith("priority_"):
-        priority = data.replace("priority_", "")
-        prefs = get_user_preferences(user_id)
-        prefs['priority'] = priority
-        save_user_preferences(user_id, prefs)
-        priority_names = {
-            'price': '💰 Цена',
-            'speed': '⚡ Скорость',
-            'comfort': '⭐ Комфорт',
-            'balance': '⚖️ Баланс'
-        }
-        await query.edit_message_text(
-            f"✅ Приоритет изменен на: *{priority_names.get(priority, priority)}*\n\n"
-            "⚙️ Настройки обновлены!",
-            parse_mode="Markdown"
-        )
-        await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
-        return
-    
-    elif data == "reset_settings":
-        save_user_preferences(user_id, {'priority': 'balance', 'max_stops': 2, 'preferred_hours': '6-23', 'avoid_airports': ''})
-        await query.edit_message_text(
-            "✅ *Настройки сброшены до стандартных*",
-            parse_mode="Markdown"
-        )
-        await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
-        return
 
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = context.user_data
@@ -785,11 +1004,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Сохраняем в историю
         query_text = f"{from_city} → {to_city} {date}"
-        save_success = save_search_history(user_id, from_city, to_city, date, query_text, flights_data[:5])
-        if save_success:
-            logger.info(f"✅ История сохранена для user {user_id}: {query_text}")
-        else:
-            logger.error(f"❌ Не удалось сохранить историю для user {user_id}")
+        save_search_history(user_id, from_city, to_city, date, query_text, flights_data[:5])
         
         response = "✈️ *Результаты поиска:*\n\n"
         if best_overall:
@@ -864,7 +1079,6 @@ async def handle_manual_search(update: Update, text, context):
         prefs = get_user_preferences(user_id)
         best_overall, cheapest, fastest = get_best_flights(flights_data, prefs)
         
-        # Сохраняем в историю
         query_text = f"{from_city} → {to_city} {date}"
         save_search_history(user_id, from_city, to_city, date, query_text, flights_data[:5])
         
