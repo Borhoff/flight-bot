@@ -12,8 +12,9 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
 
-# --- НАСТРОЙКА ---
+# --- НАСТРОЙКА ЛОГГИРОВАНИЯ ---
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 USD_TO_RUB = 95.0
 
@@ -71,6 +72,7 @@ def init_db():
     ''')
     conn.commit()
     conn.close()
+    logger.info("✅ База данных инициализирована")
 
 def get_user_preferences(user_id):
     conn = sqlite3.connect('users.db')
@@ -99,37 +101,55 @@ def save_user_preferences(user_id, preferences):
           preferences.get('avoid_airports', '')))
     conn.commit()
     conn.close()
+    logger.info(f"✅ Настройки сохранены для user {user_id}")
 
 def save_search_history(user_id, from_city, to_city, date, query_text, result):
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO search_history (user_id, from_city, to_city, date, query_text, result)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (user_id, from_city, to_city, date, query_text, json.dumps(result)))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO search_history (user_id, from_city, to_city, date, query_text, result)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (user_id, from_city, to_city, date, query_text, json.dumps(result)))
+        conn.commit()
+        conn.close()
+        logger.info(f"✅ История сохранена для user {user_id}: {from_city} → {to_city} {date}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения истории: {e}")
+        return False
 
 def get_search_history(user_id, limit=10):
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT id, from_city, to_city, date, query_text, created_at FROM search_history
-        WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
-    ''', (user_id, limit))
-    rows = cursor.fetchall()
-    conn.close()
-    return rows
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, from_city, to_city, date, query_text, created_at FROM search_history
+            WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
+        ''', (user_id, limit))
+        rows = cursor.fetchall()
+        conn.close()
+        logger.info(f"✅ Получено {len(rows)} записей истории для user {user_id}")
+        return rows
+    except Exception as e:
+        logger.error(f"❌ Ошибка получения истории: {e}")
+        return []
 
 def delete_search_history(user_id, history_id=None):
-    conn = sqlite3.connect('users.db')
-    cursor = conn.cursor()
-    if history_id:
-        cursor.execute('DELETE FROM search_history WHERE id = ? AND user_id = ?', (history_id, user_id))
-    else:
-        cursor.execute('DELETE FROM search_history WHERE user_id = ?', (user_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('users.db')
+        cursor = conn.cursor()
+        if history_id:
+            cursor.execute('DELETE FROM search_history WHERE id = ? AND user_id = ?', (history_id, user_id))
+        else:
+            cursor.execute('DELETE FROM search_history WHERE user_id = ?', (user_id,))
+        conn.commit()
+        conn.close()
+        logger.info(f"✅ История очищена для user {user_id}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка очистки истории: {e}")
+        return False
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 MONTHS_RU = {
@@ -450,11 +470,16 @@ def get_history_keyboard(user_id):
     else:
         for record in history:
             hist_id, from_city, to_city, date, query_text, created_at = record
-            # Формируем красивую кнопку
-            created = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S.%f")
-            date_str = created.strftime("%d.%m %H:%M")
+            # Форматируем дату для кнопки
+            try:
+                created = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S.%f")
+                date_str = created.strftime("%d.%m %H:%M")
+            except:
+                date_str = "недавно"
             button_text = f"✈️ {from_city} → {to_city}  {date}  ({date_str})"
-            buttons.append([InlineKeyboardButton(button_text, callback_data=f"history_{hist_id}_{from_city}_{to_city}_{date}")])
+            # Передаем все данные в callback
+            callback_data = f"history_{hist_id}_{from_city}_{to_city}_{date}"
+            buttons.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     
     buttons.append([InlineKeyboardButton("🗑️ Очистить историю", callback_data="history_clear")])
     buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")])
@@ -513,6 +538,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     elif text == "📊 История":
+        logger.info(f"📊 Пользователь {user_id} запросил историю")
         await update.message.reply_text(
             "📊 *Ваша история поиска:*\n\n"
             "Нажмите на запрос, чтобы повторить поиск.",
@@ -577,6 +603,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = context.user_data
     user_id = update.effective_user.id
     
+    logger.info(f"🔘 Callback: {data} от user {user_id}")
+    
     if data == "back_to_main":
         await query.edit_message_text("✈️ *Главное меню*", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
@@ -636,6 +664,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from_city = parts[2]
             to_city = parts[3]
             date = parts[4]
+            
+            logger.info(f"🔄 Повтор поиска из истории: {from_city} → {to_city} {date}")
             
             # Сохраняем в user_data и запускаем поиск
             user_data['from_city'] = from_city
@@ -723,6 +753,8 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     to_city = user_data.get('to_city')
     date = user_data.get('date')
     
+    logger.info(f"🔍 Поиск: {from_city} → {to_city} {date} (user {user_id})")
+    
     if not from_city or not to_city or not date:
         await update.callback_query.edit_message_text("❌ Не все данные введены. Начните заново.")
         return
@@ -753,7 +785,11 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Сохраняем в историю
         query_text = f"{from_city} → {to_city} {date}"
-        save_search_history(user_id, from_city, to_city, date, query_text, flights_data[:5])
+        save_success = save_search_history(user_id, from_city, to_city, date, query_text, flights_data[:5])
+        if save_success:
+            logger.info(f"✅ История сохранена для user {user_id}: {query_text}")
+        else:
+            logger.error(f"❌ Не удалось сохранить историю для user {user_id}")
         
         response = "✈️ *Результаты поиска:*\n\n"
         if best_overall:
@@ -777,6 +813,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
     except Exception as e:
+        logger.error(f"❌ Ошибка поиска: {e}")
         await update.callback_query.edit_message_text(f"❌ Ошибка: {str(e)}")
 
 async def handle_manual_search(update: Update, text, context):
