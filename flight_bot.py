@@ -56,6 +56,7 @@ def init_db():
             max_stops INTEGER DEFAULT 3,
             preferred_hours TEXT DEFAULT 'all',
             favorite_city TEXT DEFAULT '',
+            favorite_airport TEXT DEFAULT '',
             avoid_airports TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -79,7 +80,7 @@ def init_db():
 def get_user_preferences(user_id):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT priority, max_stops, preferred_hours, favorite_city, avoid_airports FROM users WHERE user_id = ?', (user_id,))
+    cursor.execute('SELECT priority, max_stops, preferred_hours, favorite_city, favorite_airport, avoid_airports FROM users WHERE user_id = ?', (user_id,))
     row = cursor.fetchone()
     conn.close()
     if row:
@@ -88,21 +89,23 @@ def get_user_preferences(user_id):
             'max_stops': row[1],
             'preferred_hours': row[2],
             'favorite_city': row[3] or '',
-            'avoid_airports': row[4] or ''
+            'favorite_airport': row[4] or '',
+            'avoid_airports': row[5] or ''
         }
-    return {'priority': 'balance', 'max_stops': 3, 'preferred_hours': 'all', 'favorite_city': '', 'avoid_airports': ''}
+    return {'priority': 'balance', 'max_stops': 3, 'preferred_hours': 'all', 'favorite_city': '', 'favorite_airport': '', 'avoid_airports': ''}
 
 def save_user_preferences(user_id, preferences):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT OR REPLACE INTO users (user_id, priority, max_stops, preferred_hours, favorite_city, avoid_airports)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO users (user_id, priority, max_stops, preferred_hours, favorite_city, favorite_airport, avoid_airports)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     ''', (user_id, 
           preferences.get('priority', 'balance'),
           preferences.get('max_stops', 3),
           preferences.get('preferred_hours', 'all'),
           preferences.get('favorite_city', ''),
+          preferences.get('favorite_airport', ''),
           preferences.get('avoid_airports', '')))
     conn.commit()
     conn.close()
@@ -156,68 +159,70 @@ def delete_search_history(user_id, history_id=None):
         logger.error(f"❌ Ошибка очистки истории: {e}")
         return False
 
-# --- ЗАГРУЗКА БАЗЫ АЭРОПОРТОВ ---
+# --- БАЗА АЭРОПОРТОВ ---
 def load_airports():
-    """Загружает базу аэропортов из файла airports.dat"""
     city_to_iata = {}
+    airport_names = {}
     try:
         with open('airports.dat', 'r', encoding='utf-8') as f:
             reader = csv.reader(f)
             for row in reader:
-                # row[2] — город, row[4] — IATA-код
+                # row[1] — название аэропорта, row[2] — город, row[4] — IATA-код
+                airport_name = row[1].strip()
                 city = row[2].strip().lower()
                 iata = row[4].strip()
                 if city and iata:
                     if city not in city_to_iata:
                         city_to_iata[city] = []
                     city_to_iata[city].append(iata)
+                    airport_names[iata] = airport_name
         logger.info(f"✅ Загружено {len(city_to_iata)} городов с аэропортами")
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки базы аэропортов: {e}")
-        city_to_iata = get_fallback_city_dict()
-    return city_to_iata
+        city_to_iata, airport_names = get_fallback_data()
+    return city_to_iata, airport_names
 
-def get_fallback_city_dict():
-    """Запасной словарь на случай, если файл не загрузился"""
-    return {
-        "москва": ["MOW", "SVO", "DME", "VKO"],
-        "moscow": ["MOW", "SVO", "DME", "VKO"],
-        "лондон": ["LON", "LHR", "LCY", "STN", "LGW"],
-        "london": ["LON", "LHR", "LCY", "STN", "LGW"],
-        "нью-йорк": ["NYC", "JFK", "EWR", "LGA"],
-        "new york": ["NYC", "JFK", "EWR", "LGA"],
-        "париж": ["PAR", "CDG", "ORY", "BVA"],
-        "paris": ["PAR", "CDG", "ORY", "BVA"],
-        "дубай": ["DXB", "DWC"],
-        "dubai": ["DXB", "DWC"],
-        "стамбул": ["IST", "SAW"],
-        "istanbul": ["IST", "SAW"],
+def get_fallback_data():
+    city_to_iata = {
+        "москва": ["SVO", "DME", "VKO"],
+        "moscow": ["SVO", "DME", "VKO"],
+        "лондон": ["LHR", "LCY", "STN", "LGW"],
+        "london": ["LHR", "LCY", "STN", "LGW"],
+        "нью-йорк": ["JFK", "EWR", "LGA"],
+        "new york": ["JFK", "EWR", "LGA"],
     }
+    airport_names = {
+        "SVO": "Шереметьево",
+        "DME": "Домодедово",
+        "VKO": "Внуково",
+        "LHR": "Хитроу",
+        "LCY": "Лондон-Сити",
+        "STN": "Станстед",
+        "LGW": "Гатвик",
+        "JFK": "Кеннеди",
+        "EWR": "Ньюарк",
+        "LGA": "Ла-Гуардия",
+    }
+    return city_to_iata, airport_names
 
-# Загружаем базу при старте
-CITY_TO_IATA = load_airports()
+CITY_TO_IATA, AIRPORT_NAMES = load_airports()
 
 def find_city_code(city_name):
-    """Ищет IATA-код(ы) по названию города"""
     if not city_name:
         return []
-    
     city_lower = city_name.lower().strip()
-    
-    # Проверяем, может это уже IATA-код (3 буквы)
     if len(city_lower) == 3 and city_lower.isupper():
         return [city_lower.upper()]
-    
-    # Ищем в базе
     if city_lower in CITY_TO_IATA:
         return CITY_TO_IATA[city_lower]
-    
-    # Частичное совпадение
     results = []
     for city, codes in CITY_TO_IATA.items():
         if city_lower in city or city in city_lower:
             results.extend(codes)
     return list(set(results))
+
+def get_airport_name(iata_code):
+    return AIRPORT_NAMES.get(iata_code, iata_code)
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 MONTHS_RU = {
@@ -230,7 +235,6 @@ WEEKDAYS_RU = {
     0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'
 }
 
-# Основной список городов для кнопок
 CITIES = {
     "Лондон": "LHR",
     "Нью-Йорк": "JFK",
@@ -421,7 +425,6 @@ def rate_flight(flight, user_preferences):
     return min(100, max(0, score))
 
 def format_flight_card(flight, index=None):
-    """Компактная карточка рейса"""
     price_usd = flight['price_usd']
     price_rub = int(price_usd * USD_TO_RUB) if price_usd != 'N/A' else 'N/A'
     
@@ -435,7 +438,9 @@ def format_flight_card(flight, index=None):
         dep = format_date_with_weekday(seg['departure']) if seg['departure'] != 'N/A' else 'N/A'
         arr = format_date_with_weekday(seg['arrival']) if seg['arrival'] != 'N/A' else 'N/A'
         dur = format_duration(seg['duration'])
-        card += f"   {seg['from_code']} → {seg['to_code']}  🛫 {dep}  🛬 {arr}  ⏱ {dur}\n"
+        from_name = get_airport_name(seg['from_code'])
+        to_name = get_airport_name(seg['to_code'])
+        card += f"   {from_name} ({seg['from_code']}) → {to_name} ({seg['to_code']})  🛫 {dep}  🛬 {arr}  ⏱ {dur}\n"
     
     stops = flight['stops']
     if stops == 0:
@@ -464,8 +469,7 @@ def get_best_flights(flights_data, user_preferences):
     
     return best_overall, cheapest, fastest
 
-def get_sorted_flights(flights_data, user_preferences):
-    """Сортирует рейсы в зависимости от приоритета пользователя"""
+def get_sorted_flights(flights_data, user_preferences, favorite_airport=None):
     if not flights_data:
         return []
     
@@ -474,6 +478,20 @@ def get_sorted_flights(flights_data, user_preferences):
     
     if not filtered:
         filtered = flights_data
+    
+    # Если есть избранный аэропорт — поднимаем его выше
+    if favorite_airport:
+        # Сортируем: сначала рейсы из избранного аэропорта
+        def sort_key(flight):
+            is_favorite = 0
+            if len(flight['segments']) > 0:
+                from_code = flight['segments'][0].get('from_code', '')
+                if from_code == favorite_airport:
+                    is_favorite = -1  # выше
+            # Затем по цене/скорости
+            return (is_favorite, flight['price_usd'])
+        filtered.sort(key=lambda x: (0 if len(x['segments']) > 0 and x['segments'][0].get('from_code', '') != favorite_airport else -1, x['price_usd']))
+        return filtered
     
     for flight in filtered:
         flight['score'] = rate_flight(flight, user_preferences)
@@ -486,7 +504,7 @@ def get_sorted_flights(flights_data, user_preferences):
         sorted_flights = sorted(filtered, key=lambda x: x['total_duration'])
     elif priority == 'comfort':
         sorted_flights = sorted(filtered, key=lambda x: x['stops'])
-    else:  # balance
+    else:
         sorted_flights = sorted(filtered, key=lambda x: x['score'], reverse=True)
     
     return sorted_flights
@@ -528,7 +546,6 @@ def get_main_keyboard():
     return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 def get_city_keyboard(user_id=None):
-    """Создает клавиатуру выбора города с учетом избранного"""
     buttons = []
     row = []
     
@@ -557,8 +574,22 @@ def get_city_keyboard(user_id=None):
         buttons.append(row)
     
     buttons.append([InlineKeyboardButton("🔍 Поиск по городу", callback_data="search_by_city")])
-    buttons.append([InlineKeyboardButton("✏️ Ввести IATA-код", callback_data="manual_city")])
     buttons.append([InlineKeyboardButton("✈️ Популярные маршруты", callback_data="popular_routes")])
+    return InlineKeyboardMarkup(buttons)
+
+def get_airport_choice_keyboard(city_name, codes, city_type):
+    buttons = []
+    for code in codes:
+        airport_name = get_airport_name(code)
+        button_text = f"✈️ {airport_name} ({code})"
+        if city_type == "from":
+            callback_data = f"from_airport_{code}"
+        else:
+            callback_data = f"to_airport_{code}"
+        buttons.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+    if len(codes) > 1:
+        buttons.append([InlineKeyboardButton("📌 Показать все аэропорты", callback_data=f"all_{city_type}")])
+    buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_cities")])
     return InlineKeyboardMarkup(buttons)
 
 def get_date_keyboard():
@@ -576,7 +607,8 @@ def get_settings_keyboard(user_id):
     priority = prefs.get('priority', 'balance')
     max_stops = prefs.get('max_stops', 3)
     pref_hours = prefs.get('preferred_hours', 'all')
-    favorite = prefs.get('favorite_city', '')
+    favorite_city = prefs.get('favorite_city', '')
+    favorite_airport = prefs.get('favorite_airport', '')
     
     priority_names = {
         'price': '💰 Цена',
@@ -600,18 +632,21 @@ def get_settings_keyboard(user_id):
         'all': '🕐 Любое время'
     }
     
-    fav_name = ""
-    if favorite:
+    fav_city_name = ""
+    if favorite_city:
         for name, code in CITIES.items():
-            if code == favorite:
-                fav_name = name
+            if code == favorite_city:
+                fav_city_name = name
                 break
+    
+    fav_airport_name = get_airport_name(favorite_airport) if favorite_airport else "Не выбран"
     
     buttons = [
         [InlineKeyboardButton(f"🎯 {priority_names.get(priority, 'Баланс')}", callback_data="settings_priority")],
         [InlineKeyboardButton(f"🔄 {stops_names.get(max_stops, 'Любые')}", callback_data="settings_stops")],
         [InlineKeyboardButton(f"⏰ {hours_names.get(pref_hours, 'Любое')}", callback_data="settings_hours")],
-        [InlineKeyboardButton(f"⭐ Избранный: {fav_name if fav_name else 'Не выбран'}", callback_data="settings_favorite")],
+        [InlineKeyboardButton(f"⭐ Город: {fav_city_name if fav_city_name else 'Не выбран'}", callback_data="settings_favorite_city")],
+        [InlineKeyboardButton(f"🛫 Аэропорт: {fav_airport_name}", callback_data="settings_favorite_airport")],
         [InlineKeyboardButton("🔄 Сбросить настройки", callback_data="reset_settings")],
         [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
     ]
@@ -648,23 +683,40 @@ def get_hours_keyboard():
     ]
     return InlineKeyboardMarkup(buttons)
 
-def get_favorite_keyboard():
-    """Клавиатура для выбора избранного города"""
+def get_favorite_city_keyboard():
     buttons = []
     row = []
     for i, (name, code) in enumerate(CITIES.items()):
-        row.append(InlineKeyboardButton(f"{name} ({code})", callback_data=f"fav_{code}"))
+        row.append(InlineKeyboardButton(f"{name} ({code})", callback_data=f"fav_city_{code}"))
         if (i + 1) % 2 == 0:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
-    buttons.append([InlineKeyboardButton("❌ Отключить избранный", callback_data="fav_none")])
+    buttons.append([InlineKeyboardButton("❌ Отключить", callback_data="fav_city_none")])
+    buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="settings_back")])
+    return InlineKeyboardMarkup(buttons)
+
+def get_favorite_airport_keyboard(user_id):
+    prefs = get_user_preferences(user_id)
+    favorite_city = prefs.get('favorite_city', '')
+    if not favorite_city:
+        buttons = [
+            [InlineKeyboardButton("❌ Сначала выберите город", callback_data="settings_back")],
+            [InlineKeyboardButton("◀️ Назад", callback_data="settings_back")]
+        ]
+        return InlineKeyboardMarkup(buttons)
+    
+    codes = find_city_code(favorite_city)
+    buttons = []
+    for code in codes:
+        airport_name = get_airport_name(code)
+        buttons.append([InlineKeyboardButton(f"✈️ {airport_name} ({code})", callback_data=f"fav_airport_{code}")])
+    buttons.append([InlineKeyboardButton("❌ Отключить", callback_data="fav_airport_none")])
     buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="settings_back")])
     return InlineKeyboardMarkup(buttons)
 
 def get_popular_routes(user_id=None):
-    """Популярные маршруты с учетом избранного города"""
     routes = [
         ("LHR", "JFK"),
         ("CDG", "DXB"),
@@ -716,7 +768,6 @@ def get_history_keyboard(user_id):
     
     buttons.append([InlineKeyboardButton("🗑️ Очистить историю", callback_data="history_clear")])
     buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")])
-    
     return InlineKeyboardMarkup(buttons)
 
 # --- ОБРАБОТЧИКИ ---
@@ -744,8 +795,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "✈️ Начать поиск":
         await update.message.reply_text(
             "🌍 *Откуда вылетаем?*\n\n"
-            "Выберите город из списка, введите название города или IATA-код (3 буквы):\n"
-            "Например: *Москва*, *Лондон*, *LHR*, *JFK*",
+            "Выберите город из списка или введите название города:\n"
+            "Например: *Москва*, *Лондон*, *Нью-Йорк*",
             parse_mode="Markdown",
             reply_markup=get_city_keyboard(user_id)
         )
@@ -756,7 +807,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         priority = prefs.get('priority', 'balance')
         max_stops = prefs.get('max_stops', 3)
         pref_hours = prefs.get('preferred_hours', 'all')
-        favorite = prefs.get('favorite_city', '')
+        favorite_city = prefs.get('favorite_city', '')
+        favorite_airport = prefs.get('favorite_airport', '')
         
         priority_names = {
             'price': '💰 Цена',
@@ -778,26 +830,27 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'all': '🕐 Любое время'
         }
         
-        fav_name = ""
-        if favorite:
+        fav_city_name = ""
+        if favorite_city:
             for name, code in CITIES.items():
-                if code == favorite:
-                    fav_name = name
+                if code == favorite_city:
+                    fav_city_name = name
                     break
+        fav_airport_name = get_airport_name(favorite_airport) if favorite_airport else "Не выбран"
         
         await update.message.reply_text(
             f"⚙️ *Ваши настройки:*\n\n"
             f"🎯 Приоритет: {priority_names.get(priority, 'Баланс')}\n"
             f"🔄 Пересадки: {stops_names.get(max_stops, 'Любые')}\n"
             f"⏰ Время: {hours_names.get(pref_hours, 'Любое')}\n"
-            f"⭐ Избранный город: {fav_name if fav_name else 'Не выбран'}\n\n"
+            f"⭐ Город: {fav_city_name if fav_city_name else 'Не выбран'}\n"
+            f"🛫 Аэропорт: {fav_airport_name}\n\n"
             "Нажмите на параметр, чтобы изменить:",
             parse_mode="Markdown",
             reply_markup=get_settings_keyboard(user_id)
         )
     
     elif text == "📊 История":
-        logger.info(f"📊 Пользователь {user_id} запросил историю")
         await update.message.reply_text(
             "📊 *Ваша история поиска:*\n\n"
             "Нажмите на запрос, чтобы повторить поиск.",
@@ -810,75 +863,46 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✈️ *Как пользоваться ботом:*\n\n"
             "1️⃣ Нажмите *«Начать поиск»*\n"
             "2️⃣ Выберите город вылета (можно ввести название)\n"
-            "3️⃣ Выберите город прибытия\n"
-            "4️⃣ Выберите дату\n"
-            "5️⃣ Получите 3 варианта:\n"
-            "   ⭐ Лучший (рекомендованный)\n"
-            "   💰 Самый дешевый\n"
-            "   ⚡ Самый быстрый\n\n"
+            "3️⃣ Выберите аэропорт вылета\n"
+            "4️⃣ Выберите город прибытия\n"
+            "5️⃣ Выберите аэропорт прибытия\n"
+            "6️⃣ Выберите дату\n"
+            "7️⃣ Получите 3 варианта!\n\n"
             "*Или отправьте запрос вручную:*\n"
             "`LHR → JFK 2026-07-20`\n"
             "`Москва → Стамбул 2026-07-20`"
         )
         await update.message.reply_text(help_text, parse_mode="Markdown")
     
-    elif user_data.get('state') == 'manual_city':
-        if len(text) == 3 and text.isupper():
-            if user_data.get('city_type') == 'from':
-                user_data['from_city'] = text
-                user_data['state'] = 'to_city'
-                await update.message.reply_text(
-                    f"✅ Выбран вылет: *{text}*\n\n"
-                    "🌍 *Куда летим?*\nВыберите город:",
-                    parse_mode="Markdown",
-                    reply_markup=get_city_keyboard(user_id)
-                )
-            else:
-                user_data['to_city'] = text
-                user_data['state'] = 'date'
-                await update.message.reply_text(
-                    f"✅ Выбран прилет: *{text}*\n\n"
-                    "📅 *Когда летим?*\nВыберите дату:",
-                    parse_mode="Markdown",
-                    reply_markup=get_date_keyboard()
-                )
-        else:
-            await update.message.reply_text("❌ Введите IATA-код (3 заглавные буквы), например: LHR")
-    
     elif user_data.get('state') == 'search_by_city':
-        # Пользователь ввел название города
         codes = find_city_code(text)
         if codes:
-            # Если несколько кодов — выбираем первый
-            code = codes[0]
+            city_name = text.strip()
+            # Показываем выбор аэропорта
             if user_data.get('city_type') == 'from':
-                user_data['from_city'] = code
-                user_data['state'] = 'to_city'
-                airports_text = ", ".join(codes)
+                user_data['city_name'] = city_name
+                user_data['state'] = 'select_from_airport'
                 await update.message.reply_text(
-                    f"✅ Найден город: *{text}* → коды: {airports_text}\n"
-                    f"✅ Выбран вылет: *{code}*\n\n"
-                    "🌍 *Куда летим?*\nВыберите город или введите название:",
+                    f"🌍 Найден город: *{city_name}*\n\n"
+                    "✈️ Выберите аэропорт вылета:",
                     parse_mode="Markdown",
-                    reply_markup=get_city_keyboard(user_id)
+                    reply_markup=get_airport_choice_keyboard(city_name, codes, "from")
                 )
             else:
-                user_data['to_city'] = code
-                user_data['state'] = 'date'
-                airports_text = ", ".join(codes)
+                user_data['city_name'] = city_name
+                user_data['state'] = 'select_to_airport'
                 await update.message.reply_text(
-                    f"✅ Найден город: *{text}* → коды: {airports_text}\n"
-                    f"✅ Выбран прилет: *{code}*\n\n"
-                    "📅 *Когда летим?*\nВыберите дату:",
+                    f"🌍 Найден город: *{city_name}*\n\n"
+                    "✈️ Выберите аэропорт прибытия:",
                     parse_mode="Markdown",
-                    reply_markup=get_date_keyboard()
+                    reply_markup=get_airport_choice_keyboard(city_name, codes, "to")
                 )
         else:
             await update.message.reply_text(
                 f"❌ Город *{text}* не найден.\n\n"
                 "Попробуйте:\n"
                 "• Написать на английском (например, Moscow)\n"
-                "• Использовать IATA-код (3 буквы, например LHR)\n"
+                "• Проверить правильность написания\n"
                 "• Выбрать из списка городов",
                 parse_mode="Markdown"
             )
@@ -894,17 +918,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     else:
         # Проверяем, может это поиск по городу
-        if len(text) > 3 and not text.isupper():
-            # Пробуем найти город
+        if len(text) > 3:
             codes = find_city_code(text)
             if codes:
-                # Если нашли — предлагаем использовать
-                code = codes[0]
-                airports_text = ", ".join(codes)
                 await update.message.reply_text(
-                    f"🔍 Найден город: *{text}* → коды: {airports_text}\n"
-                    f"Использовать код *{code}* для поиска?\n\n"
-                    f"Отправьте `{code} → ...` или выберите из списка.",
+                    f"🔍 Найден город: *{text}* → коды: {', '.join(codes)}\n\n"
+                    "Выберите город из списка выше или продолжите ввод.",
                     parse_mode="Markdown"
                 )
                 return
@@ -920,8 +939,68 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"🔘 Callback: {data} от user {user_id}")
     
+    # --- ВЫБОР АЭРОПОРТА ---
+    if data.startswith("from_airport_"):
+        code = data.replace("from_airport_", "")
+        user_data['from_city'] = code
+        user_data['state'] = 'to_city'
+        await query.edit_message_text(
+            f"✅ Выбран аэропорт вылета: *{get_airport_name(code)} ({code})*\n\n"
+            "🌍 *Куда летим?*\nВыберите город или введите название:",
+            parse_mode="Markdown",
+            reply_markup=get_city_keyboard(user_id)
+        )
+        return
+    
+    elif data.startswith("to_airport_"):
+        code = data.replace("to_airport_", "")
+        user_data['to_city'] = code
+        user_data['state'] = 'date'
+        await query.edit_message_text(
+            f"✅ Выбран аэропорт прибытия: *{get_airport_name(code)} ({code})*\n\n"
+            "📅 *Когда летим?*\nВыберите дату:",
+            parse_mode="Markdown",
+            reply_markup=get_date_keyboard()
+        )
+        return
+    
+    elif data.startswith("all_"):
+        city_type = data.replace("all_", "")
+        codes = find_city_code(user_data.get('city_name', ''))
+        if city_type == "from":
+            code = codes[0] if codes else ""
+            user_data['from_city'] = code
+            user_data['state'] = 'to_city'
+            await query.edit_message_text(
+                f"✅ Выбран аэропорт: *{get_airport_name(code)} ({code})*\n\n"
+                "🌍 *Куда летим?*\nВыберите город:",
+                parse_mode="Markdown",
+                reply_markup=get_city_keyboard(user_id)
+            )
+        else:
+            code = codes[0] if codes else ""
+            user_data['to_city'] = code
+            user_data['state'] = 'date'
+            await query.edit_message_text(
+                f"✅ Выбран аэропорт: *{get_airport_name(code)} ({code})*\n\n"
+                "📅 *Когда летим?*\nВыберите дату:",
+                parse_mode="Markdown",
+                reply_markup=get_date_keyboard()
+            )
+        return
+    
+    elif data == "back_to_cities":
+        user_data['state'] = 'from_city'
+        await query.edit_message_text(
+            "🌍 *Откуда вылетаем?*\n\n"
+            "Выберите город из списка или введите название:",
+            parse_mode="Markdown",
+            reply_markup=get_city_keyboard(user_id)
+        )
+        return
+    
     # --- ПОИСК ПО ГОРОДУ ---
-    if data == "search_by_city":
+    elif data == "search_by_city":
         user_data['state'] = 'search_by_city'
         if not user_data.get('from_city'):
             user_data['city_type'] = 'from'
@@ -942,28 +1021,33 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # --- ИЗБРАННЫЙ ГОРОД ---
-    elif data == "settings_favorite":
+    elif data == "settings_favorite_city":
         await query.edit_message_text(
             "⭐ *Выберите избранный город вылета*\n\n"
-            "Этот город будет показываться первым в списке при поиске.\n\n"
-            "Выберите город:",
+            "Этот город будет показываться первым в списке.",
             parse_mode="Markdown",
-            reply_markup=get_favorite_keyboard()
+            reply_markup=get_favorite_city_keyboard()
         )
         return
     
-    elif data.startswith("fav_"):
-        code = data.replace("fav_", "")
+    elif data == "settings_favorite_airport":
+        await query.edit_message_text(
+            "🛫 *Выберите избранный аэропорт*\n\n"
+            "Рейсы из этого аэропорта будут показываться первыми.",
+            parse_mode="Markdown",
+            reply_markup=get_favorite_airport_keyboard(user_id)
+        )
+        return
+    
+    elif data.startswith("fav_city_"):
+        code = data.replace("fav_city_", "")
         if code == "none":
             prefs = get_user_preferences(user_id)
             prefs['favorite_city'] = ''
+            prefs['favorite_airport'] = ''
             save_user_preferences(user_id, prefs)
-            await query.edit_message_text(
-                "✅ Избранный город *отключен*",
-                parse_mode="Markdown"
-            )
+            await query.edit_message_text("✅ Избранный город *отключен*", parse_mode="Markdown")
         else:
-            # Находим название города
             fav_name = None
             for name, c in CITIES.items():
                 if c == code:
@@ -976,8 +1060,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ Избранный город: *{fav_name if fav_name else code}* ({code})",
                 parse_mode="Markdown"
             )
-        
-        # Возвращаем в настройки
+        await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
+        return
+    
+    elif data.startswith("fav_airport_"):
+        code = data.replace("fav_airport_", "")
+        if code == "none":
+            prefs = get_user_preferences(user_id)
+            prefs['favorite_airport'] = ''
+            save_user_preferences(user_id, prefs)
+            await query.edit_message_text("✅ Избранный аэропорт *отключен*", parse_mode="Markdown")
+        else:
+            prefs = get_user_preferences(user_id)
+            prefs['favorite_airport'] = code
+            save_user_preferences(user_id, prefs)
+            await query.edit_message_text(
+                f"✅ Избранный аэропорт: *{get_airport_name(code)} ({code})*",
+                parse_mode="Markdown"
+            )
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
     
@@ -1017,7 +1117,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         priority = prefs.get('priority', 'balance')
         max_stops = prefs.get('max_stops', 3)
         pref_hours = prefs.get('preferred_hours', 'all')
-        favorite = prefs.get('favorite_city', '')
+        favorite_city = prefs.get('favorite_city', '')
+        favorite_airport = prefs.get('favorite_airport', '')
         
         priority_names = {
             'price': '💰 Цена',
@@ -1039,19 +1140,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'all': '🕐 Любое время'
         }
         
-        fav_name = ""
-        if favorite:
+        fav_city_name = ""
+        if favorite_city:
             for name, code in CITIES.items():
-                if code == favorite:
-                    fav_name = name
+                if code == favorite_city:
+                    fav_city_name = name
                     break
+        fav_airport_name = get_airport_name(favorite_airport) if favorite_airport else "Не выбран"
         
         await query.edit_message_text(
             f"⚙️ *Ваши настройки:*\n\n"
             f"🎯 Приоритет: {priority_names.get(priority, 'Баланс')}\n"
             f"🔄 Пересадки: {stops_names.get(max_stops, 'Любые')}\n"
             f"⏰ Время: {hours_names.get(pref_hours, 'Любое')}\n"
-            f"⭐ Избранный город: {fav_name if fav_name else 'Не выбран'}\n\n"
+            f"⭐ Город: {fav_city_name if fav_city_name else 'Не выбран'}\n"
+            f"🛫 Аэропорт: {fav_airport_name}\n\n"
             "Нажмите на параметр, чтобы изменить:",
             parse_mode="Markdown",
             reply_markup=get_settings_keyboard(user_id)
@@ -1123,13 +1226,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     elif data == "reset_settings":
-        save_user_preferences(user_id, {'priority': 'balance', 'max_stops': 3, 'preferred_hours': 'all', 'favorite_city': '', 'avoid_airports': ''})
+        save_user_preferences(user_id, {'priority': 'balance', 'max_stops': 3, 'preferred_hours': 'all', 'favorite_city': '', 'favorite_airport': '', 'avoid_airports': ''})
         await query.edit_message_text(
             "✅ *Настройки сброшены до стандартных*\n\n"
             "🎯 Приоритет: Баланс\n"
             "🔄 Пересадки: Любые\n"
             "⏰ Время: Любое\n"
-            "⭐ Избранный город: Не выбран",
+            "⭐ Город: Не выбран\n"
+            "🛫 Аэропорт: Не выбран",
             parse_mode="Markdown"
         )
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
@@ -1139,24 +1243,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "back_to_main":
         await query.edit_message_text("✈️ *Главное меню*", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
-        return
-    
-    elif data == "manual_city":
-        user_data['state'] = 'manual_city'
-        if not user_data.get('from_city'):
-            user_data['city_type'] = 'from'
-            await query.edit_message_text(
-                "✏️ Введите IATA-код *города вылета* (3 буквы):\n"
-                "Например: *LHR*, *JFK*, *CDG*",
-                parse_mode="Markdown"
-            )
-        else:
-            user_data['city_type'] = 'to'
-            await query.edit_message_text(
-                "✏️ Введите IATA-код *города прибытия* (3 буквы):\n"
-                "Например: *LHR*, *JFK*, *CDG*",
-                parse_mode="Markdown"
-            )
         return
     
     elif data == "manual_date":
@@ -1219,24 +1305,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data.startswith("city_"):
         code = data.replace("city_", "")
-        if not user_data.get('from_city'):
-            user_data['from_city'] = code
-            user_data['state'] = 'to_city'
-            await query.edit_message_text(
-                f"✅ Выбран вылет: *{code}*\n\n"
-                "🌍 *Куда летим?*\nВыберите город:",
-                parse_mode="Markdown",
-                reply_markup=get_city_keyboard(user_id)
-            )
-        else:
-            user_data['to_city'] = code
-            user_data['state'] = 'date'
-            await query.edit_message_text(
-                f"✅ Выбран прилет: *{code}*\n\n"
-                "📅 *Когда летим?*\nВыберите дату:",
-                parse_mode="Markdown",
-                reply_markup=get_date_keyboard()
-            )
+        # Ищем аэропорты в этом городе
+        codes = find_city_code(code)
+        if codes:
+            if not user_data.get('from_city'):
+                user_data['city_name'] = code
+                user_data['state'] = 'select_from_airport'
+                await query.edit_message_text(
+                    f"🌍 Выбран город: *{code}*\n\n"
+                    "✈️ Выберите аэропорт вылета:",
+                    parse_mode="Markdown",
+                    reply_markup=get_airport_choice_keyboard(code, codes, "from")
+                )
+            else:
+                user_data['city_name'] = code
+                user_data['state'] = 'select_to_airport'
+                await query.edit_message_text(
+                    f"🌍 Выбран город: *{code}*\n\n"
+                    "✈️ Выберите аэропорт прибытия:",
+                    parse_mode="Markdown",
+                    reply_markup=get_airport_choice_keyboard(code, codes, "to")
+                )
         return
     
     elif data.startswith("date_"):
@@ -1281,8 +1370,9 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         prefs = get_user_preferences(user_id)
+        favorite_airport = prefs.get('favorite_airport', '')
         
-        sorted_flights = get_sorted_flights(flights_data, prefs)
+        sorted_flights = get_sorted_flights(flights_data, prefs, favorite_airport)
         best_overall, cheapest, fastest = get_best_flights(flights_data, prefs)
         
         query_text = f"{from_city} → {to_city} {date}"
@@ -1297,7 +1387,10 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current_priority = prefs.get('priority', 'balance')
         
         response = f"✈️ *Результаты поиска:*\n"
-        response += f"🎯 Приоритет: {priority_names.get(current_priority, 'Баланс')}\n\n"
+        response += f"🎯 Приоритет: {priority_names.get(current_priority, 'Баланс')}\n"
+        if favorite_airport:
+            response += f"🛫 Приоритетный аэропорт: {get_airport_name(favorite_airport)} ({favorite_airport})\n"
+        response += "\n"
         
         if sorted_flights:
             response += f"📋 *Топ {min(5, len(sorted_flights))} вариантов:*\n\n"
@@ -1369,8 +1462,9 @@ async def handle_manual_search(update: Update, text, context):
             return
         
         prefs = get_user_preferences(user_id)
+        favorite_airport = prefs.get('favorite_airport', '')
         
-        sorted_flights = get_sorted_flights(flights_data, prefs)
+        sorted_flights = get_sorted_flights(flights_data, prefs, favorite_airport)
         best_overall, cheapest, fastest = get_best_flights(flights_data, prefs)
         
         query_text = f"{from_city} → {to_city} {date}"
@@ -1385,7 +1479,10 @@ async def handle_manual_search(update: Update, text, context):
         current_priority = prefs.get('priority', 'balance')
         
         response = f"✈️ *Результаты поиска:*\n"
-        response += f"🎯 Приоритет: {priority_names.get(current_priority, 'Баланс')}\n\n"
+        response += f"🎯 Приоритет: {priority_names.get(current_priority, 'Баланс')}\n"
+        if favorite_airport:
+            response += f"🛫 Приоритетный аэропорт: {get_airport_name(favorite_airport)} ({favorite_airport})\n"
+        response += "\n"
         
         if sorted_flights:
             response += f"📋 *Топ {min(5, len(sorted_flights))} вариантов:*\n\n"
