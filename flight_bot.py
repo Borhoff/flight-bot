@@ -167,7 +167,6 @@ def load_airports():
         with open('airports.dat', 'r', encoding='utf-8') as f:
             reader = csv.reader(f)
             for row in reader:
-                # row[1] — название аэропорта, row[2] — город, row[4] — IATA-код
                 airport_name = row[1].strip()
                 city = row[2].strip().lower()
                 iata = row[4].strip()
@@ -207,18 +206,202 @@ def get_fallback_data():
 
 CITY_TO_IATA, AIRPORT_NAMES = load_airports()
 
+# --- КОНВЕРТЕР НАЗВАНИЙ ГОРОДОВ (РУССКИЙ → АНГЛИЙСКИЙ) ---
+CITY_NAME_CONVERTER = {
+    # Россия
+    "москва": "moscow",
+    "moscow": "moscow",
+    "спб": "saint petersburg",
+    "санкт-петербург": "saint petersburg",
+    "saint petersburg": "saint petersburg",
+    "st petersburg": "saint petersburg",
+    "екатеринбург": "yekaterinburg",
+    "yekaterinburg": "yekaterinburg",
+    "новосибирск": "novosibirsk",
+    "novosibirsk": "novosibirsk",
+    "владивосток": "vladivostok",
+    "vladivostok": "vladivostok",
+    "сочи": "sochi",
+    "sochi": "sochi",
+    "казань": "kazan",
+    "kazan": "kazan",
+    "ростов": "rostov",
+    "rostov": "rostov",
+    "краснодар": "krasnodar",
+    "krasnodar": "krasnodar",
+    "самара": "samara",
+    "samara": "samara",
+    "уфа": "ufa",
+    "ufa": "ufa",
+    "пермь": "perm",
+    "perm": "perm",
+    "волгоград": "volgograd",
+    "volgograd": "volgograd",
+    "нижний новгород": "nizhny novgorod",
+    "nizhny novgorod": "nizhny novgorod",
+    
+    # Европа
+    "лондон": "london",
+    "london": "london",
+    "париж": "paris",
+    "paris": "paris",
+    "берлин": "berlin",
+    "berlin": "berlin",
+    "рим": "rome",
+    "rome": "rome",
+    "мадрид": "madrid",
+    "madrid": "madrid",
+    "барселона": "barcelona",
+    "barcelona": "barcelona",
+    "милан": "milan",
+    "milan": "milan",
+    "вен": "vienna",
+    "vienna": "vienna",
+    "прага": "prague",
+    "prague": "prague",
+    "варшава": "warsaw",
+    "warsaw": "warsaw",
+    "будапешт": "budapest",
+    "budapest": "budapest",
+    "амстердам": "amsterdam",
+    "amsterdam": "amsterdam",
+    "брюссель": "brussels",
+    "brussels": "brussels",
+    "осло": "oslo",
+    "oslo": "oslo",
+    "стокгольм": "stockholm",
+    "stockholm": "stockholm",
+    "копенгаген": "copenhagen",
+    "copenhagen": "copenhagen",
+    "хельсинки": "helsinki",
+    "helsinki": "helsinki",
+    "афины": "athens",
+    "athens": "athens",
+    "лисабон": "lisbon",
+    "lisbon": "lisbon",
+    "дублин": "dublin",
+    "dublin": "dublin",
+    
+    # Азия
+    "стамбул": "istanbul",
+    "istanbul": "istanbul",
+    "дубай": "dubai",
+    "dubai": "dubai",
+    "токио": "tokyo",
+    "tokyo": "tokyo",
+    "сеул": "seoul",
+    "seoul": "seoul",
+    "сингапур": "singapore",
+    "singapore": "singapore",
+    "бангкок": "bangkok",
+    "bangkok": "bangkok",
+    "пекин": "beijing",
+    "beijing": "beijing",
+    "шанхай": "shanghai",
+    "shanghai": "shanghai",
+    "гонконг": "hong kong",
+    "hong kong": "hong kong",
+    "тайбэй": "taipei",
+    "taipei": "taipei",
+    "джакарта": "jakarta",
+    "jakarta": "jakarta",
+    "куала-лумпур": "kuala lumpur",
+    "kuala lumpur": "kuala lumpur",
+    "манила": "manila",
+    "manila": "manila",
+    "ханой": "hanoi",
+    "hanoi": "hanoi",
+    "хошимин": "ho chi minh city",
+    "ho chi minh city": "ho chi minh city",
+    "мумбаи": "mumbai",
+    "mumbai": "mumbai",
+    "дель": "delhi",
+    "delhi": "delhi",
+    
+    # Америка
+    "нью-йорк": "new york",
+    "new york": "new york",
+    "лос-анджелес": "los angeles",
+    "los angeles": "los angeles",
+    "чикаго": "chicago",
+    "chicago": "chicago",
+    "майами": "miami",
+    "miami": "miami",
+    "торонто": "toronto",
+    "toronto": "toronto",
+    "ванкувер": "vancouver",
+    "vancouver": "vancouver",
+    "мехико": "mexico city",
+    "mexico city": "mexico city",
+    "сан-франциско": "san francisco",
+    "san francisco": "san francisco",
+    "бостон": "boston",
+    "boston": "boston",
+    "вашингтон": "washington",
+    "washington": "washington",
+    "рио-де-жанейро": "rio de janeiro",
+    "rio de janeiro": "rio de janeiro",
+    "буэнос-айрес": "buenos aires",
+    "buenos aires": "buenos aires",
+    
+    # Австралия и Океания
+    "сидней": "sydney",
+    "sydney": "sydney",
+    "мельбурн": "melbourne",
+    "melbourne": "melbourne",
+    "окленд": "auckland",
+    "auckland": "auckland",
+    
+    # Африка
+    "кейптаун": "cape town",
+    "cape town": "cape town",
+    "каир": "cairo",
+    "cairo": "cairo",
+    "найроби": "nairobi",
+    "nairobi": "nairobi",
+}
+
+def normalize_city_name(city_name):
+    """Конвертирует название города в английский вариант"""
+    if not city_name:
+        return city_name
+    
+    city_lower = city_name.strip().lower()
+    
+    # Если это IATA-код (3 буквы, заглавные), возвращаем как есть
+    if len(city_lower) == 3 and city_name.isupper():
+        return city_lower
+    
+    # Ищем в словаре конвертации
+    if city_lower in CITY_NAME_CONVERTER:
+        return CITY_NAME_CONVERTER[city_lower]
+    
+    # Если не нашли — возвращаем как есть (возможно, уже на английском)
+    return city_lower
+
 def find_city_code(city_name):
+    """Ищет IATA-код(ы) по названию города (поддерживает русский и английский)"""
     if not city_name:
         return []
-    city_lower = city_name.lower().strip()
-    if len(city_lower) == 3 and city_lower.isupper():
+    
+    # Конвертируем название в английский вариант
+    normalized = normalize_city_name(city_name)
+    city_lower = normalized.lower().strip()
+    
+    # Если это IATA-код (3 буквы, заглавные)
+    if len(city_lower) == 3 and city_name.isupper():
         return [city_lower.upper()]
+    
+    # Ищем в базе аэропортов
     if city_lower in CITY_TO_IATA:
         return CITY_TO_IATA[city_lower]
+    
+    # Частичное совпадение
     results = []
     for city, codes in CITY_TO_IATA.items():
         if city_lower in city or city in city_lower:
             results.extend(codes)
+    
     return list(set(results))
 
 def get_airport_name(iata_code):
@@ -479,16 +662,13 @@ def get_sorted_flights(flights_data, user_preferences, favorite_airport=None):
     if not filtered:
         filtered = flights_data
     
-    # Если есть избранный аэропорт — поднимаем его выше
     if favorite_airport:
-        # Сортируем: сначала рейсы из избранного аэропорта
         def sort_key(flight):
             is_favorite = 0
             if len(flight['segments']) > 0:
                 from_code = flight['segments'][0].get('from_code', '')
                 if from_code == favorite_airport:
-                    is_favorite = -1  # выше
-            # Затем по цене/скорости
+                    is_favorite = -1
             return (is_favorite, flight['price_usd'])
         filtered.sort(key=lambda x: (0 if len(x['segments']) > 0 and x['segments'][0].get('from_code', '') != favorite_airport else -1, x['price_usd']))
         return filtered
@@ -693,6 +873,7 @@ def get_favorite_city_keyboard():
             row = []
     if row:
         buttons.append(row)
+    buttons.append([InlineKeyboardButton("✏️ Ввести город вручную", callback_data="fav_city_manual")])
     buttons.append([InlineKeyboardButton("❌ Отключить", callback_data="fav_city_none")])
     buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="settings_back")])
     return InlineKeyboardMarkup(buttons)
@@ -795,8 +976,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "✈️ Начать поиск":
         await update.message.reply_text(
             "🌍 *Откуда вылетаем?*\n\n"
-            "Выберите город из списка или введите название города:\n"
-            "Например: *Москва*, *Лондон*, *Нью-Йорк*",
+            "Выберите город из списка, введите название города (на русском или английском):\n"
+            "Например: *Москва*, *London*, *Нью-Йорк*",
             parse_mode="Markdown",
             reply_markup=get_city_keyboard(user_id)
         )
@@ -836,6 +1017,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if code == favorite_city:
                     fav_city_name = name
                     break
+        
         fav_airport_name = get_airport_name(favorite_airport) if favorite_airport else "Не выбран"
         
         await update.message.reply_text(
@@ -862,7 +1044,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         help_text = (
             "✈️ *Как пользоваться ботом:*\n\n"
             "1️⃣ Нажмите *«Начать поиск»*\n"
-            "2️⃣ Выберите город вылета (можно ввести название)\n"
+            "2️⃣ Выберите город вылета (можно ввести название на русском или английском)\n"
             "3️⃣ Выберите аэропорт вылета\n"
             "4️⃣ Выберите город прибытия\n"
             "5️⃣ Выберите аэропорт прибытия\n"
@@ -870,7 +1052,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "7️⃣ Получите 3 варианта!\n\n"
             "*Или отправьте запрос вручную:*\n"
             "`LHR → JFK 2026-07-20`\n"
-            "`Москва → Стамбул 2026-07-20`"
+            "`Москва → Стамбул 2026-07-20`\n"
+            "`Moscow → Istanbul 2026-07-20`"
         )
         await update.message.reply_text(help_text, parse_mode="Markdown")
     
@@ -878,7 +1061,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         codes = find_city_code(text)
         if codes:
             city_name = text.strip()
-            # Показываем выбор аэропорта
             if user_data.get('city_type') == 'from':
                 user_data['city_name'] = city_name
                 user_data['state'] = 'select_from_airport'
@@ -901,9 +1083,37 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"❌ Город *{text}* не найден.\n\n"
                 "Попробуйте:\n"
+                "• Написать на русском (например, Москва)\n"
                 "• Написать на английском (например, Moscow)\n"
                 "• Проверить правильность написания\n"
                 "• Выбрать из списка городов",
+                parse_mode="Markdown"
+            )
+        return
+    
+    elif user_data.get('state') == 'fav_city_manual':
+        codes = find_city_code(text)
+        if codes:
+            prefs = get_user_preferences(user_id)
+            # Находим код города (берём первый)
+            city_code = codes[0]
+            prefs['favorite_city'] = city_code
+            save_user_preferences(user_id, prefs)
+            await update.message.reply_text(
+                f"✅ Избранный город: *{text}* ({city_code})",
+                parse_mode="Markdown"
+            )
+            # Показываем настройки
+            await update.message.reply_text(
+                "👇 Выберите действие:",
+                reply_markup=get_main_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Город *{text}* не найден.\n\n"
+                "Попробуйте:\n"
+                "• Написать на русском (например, Москва)\n"
+                "• Написать на английском (например, Moscow)",
                 parse_mode="Markdown"
             )
         return
@@ -917,7 +1127,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Неправильный формат. Используй: ГГГГ-ММ-ДД")
     
     else:
-        # Проверяем, может это поиск по городу
+        # Проверяем, может это поиск по городу (если пользователь ввел название)
         if len(text) > 3:
             codes = find_city_code(text)
             if codes:
@@ -1024,9 +1234,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "settings_favorite_city":
         await query.edit_message_text(
             "⭐ *Выберите избранный город вылета*\n\n"
-            "Этот город будет показываться первым в списке.",
+            "Выберите из списка или нажмите «Ввести город вручную»:",
             parse_mode="Markdown",
             reply_markup=get_favorite_city_keyboard()
+        )
+        return
+    
+    elif data == "fav_city_manual":
+        user_data['state'] = 'fav_city_manual'
+        await query.edit_message_text(
+            "✏️ *Введите название города*\n\n"
+            "Например: *Москва*, *London*, *Нью-Йорк*\n\n"
+            "Бот сам найдёт IATA-код.",
+            parse_mode="Markdown"
         )
         return
     
@@ -1305,7 +1525,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data.startswith("city_"):
         code = data.replace("city_", "")
-        # Ищем аэропорты в этом городе
         codes = find_city_code(code)
         if codes:
             if not user_data.get('from_city'):
