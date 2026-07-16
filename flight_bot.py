@@ -278,14 +278,13 @@ def parse_flight_data(result):
             continue
     return flights_data
 
-# --- СИСТЕМА ОЦЕНКИ с учетом настроек ---
+# --- СИСТЕМА ОЦЕНКИ ---
 def rate_flight(flight, user_preferences):
     score = 0
     price = flight['price_usd']
     stops = flight['stops']
     total_duration = flight['total_duration']
     
-    # Цена
     if price < 200:
         score += 30
     elif price < 400:
@@ -297,7 +296,6 @@ def rate_flight(flight, user_preferences):
     else:
         score += 10
     
-    # Пересадки (с учетом max_stops)
     max_stops = user_preferences.get('max_stops', 3)
     if stops <= max_stops:
         if stops == 0:
@@ -309,9 +307,8 @@ def rate_flight(flight, user_preferences):
         else:
             score += 5
     else:
-        score -= 10  # Штраф за превышение лимита пересадок
+        score -= 10
     
-    # Время вылета (с учетом preferred_hours)
     if len(flight['segments']) > 0:
         dep_hour = flight['segments'][0].get('departure_hour', 12)
         pref_hours = user_preferences.get('preferred_hours', 'all')
@@ -322,7 +319,7 @@ def rate_flight(flight, user_preferences):
             score += 20
         elif pref_hours == 'evening' and 18 <= dep_hour <= 23:
             score += 20
-        elif pref_hours == 'night' and 23 <= dep_hour <= 6:
+        elif pref_hours == 'night' and (dep_hour >= 23 or dep_hour <= 6):
             score += 20
         elif pref_hours == 'all':
             if 8 <= dep_hour <= 20:
@@ -335,7 +332,6 @@ def rate_flight(flight, user_preferences):
             else:
                 score += 5
     
-    # Время в пути
     if total_duration < 180:
         score += 20
     elif total_duration < 360:
@@ -345,7 +341,6 @@ def rate_flight(flight, user_preferences):
     else:
         score += 5
     
-    # Приоритет пользователя
     priority = user_preferences.get('priority', 'balance')
     if priority == 'price':
         score = score * 0.6 + max(0, (100 - price / 5)) * 0.4
@@ -357,30 +352,31 @@ def rate_flight(flight, user_preferences):
     
     return min(100, max(0, score))
 
-def format_flight_card(flight, index=None):
+def format_flight_card(flight, index=None, show_label=False):
+    """Компактная карточка рейса"""
     price_usd = flight['price_usd']
     price_rub = int(price_usd * USD_TO_RUB) if price_usd != 'N/A' else 'N/A'
     
     card = ""
     if index:
-        card += f"*{index}.* ✈️ {flight['airline']} - {price_rub} ₽ ({price_usd} USD)\n"
-    else:
-        card += f"✈️ {flight['airline']} - {price_rub} ₽ ({price_usd} USD)\n"
+        card += f"*{index}.* "
     
+    # Авиакомпания и цена в одну строку
+    card += f"✈️ *{flight['airline']}* — {price_rub} ₽ (${price_usd})\n"
+    
+    # Сегменты
     for j, seg in enumerate(flight['segments'], 1):
         dep = format_date_with_weekday(seg['departure']) if seg['departure'] != 'N/A' else 'N/A'
         arr = format_date_with_weekday(seg['arrival']) if seg['arrival'] != 'N/A' else 'N/A'
         dur = format_duration(seg['duration'])
-        card += f"   {j}→ {seg['from_airport']} ({seg['from_code']}) → {seg['to_airport']} ({seg['to_code']})\n"
-        card += f"      🛫 {dep}\n"
-        card += f"      🛬 {arr}\n"
-        card += f"      ⏱ {dur}\n"
+        card += f"   {seg['from_code']} → {seg['to_code']}  🛫 {dep}  🛬 {arr}  ⏱ {dur}\n"
     
+    # Пересадки
     stops = flight['stops']
     if stops == 0:
         card += f"   🟢 *Прямой рейс*"
     else:
-        card += f"   🔄 *Пересадок: {stops}*"
+        card += f"   🔄 *{stops} пересадки*"
     
     return card
 
@@ -388,7 +384,6 @@ def get_best_flights(flights_data, user_preferences):
     if not flights_data:
         return None, None, None
     
-    # Фильтруем по max_stops
     max_stops = user_preferences.get('max_stops', 3)
     filtered = [f for f in flights_data if f['stops'] <= max_stops]
     
@@ -403,6 +398,33 @@ def get_best_flights(flights_data, user_preferences):
     fastest = min(filtered, key=lambda x: x['total_duration']) if filtered else None
     
     return best_overall, cheapest, fastest
+
+def get_sorted_flights(flights_data, user_preferences):
+    """Сортирует рейсы в зависимости от приоритета пользователя"""
+    if not flights_data:
+        return []
+    
+    max_stops = user_preferences.get('max_stops', 3)
+    filtered = [f for f in flights_data if f['stops'] <= max_stops]
+    
+    if not filtered:
+        filtered = flights_data
+    
+    for flight in filtered:
+        flight['score'] = rate_flight(flight, user_preferences)
+    
+    priority = user_preferences.get('priority', 'balance')
+    
+    if priority == 'price':
+        sorted_flights = sorted(filtered, key=lambda x: x['price_usd'])
+    elif priority == 'speed':
+        sorted_flights = sorted(filtered, key=lambda x: x['total_duration'])
+    elif priority == 'comfort':
+        sorted_flights = sorted(filtered, key=lambda x: x['stops'])
+    else:  # balance
+        sorted_flights = sorted(filtered, key=lambda x: x['score'], reverse=True)
+    
+    return sorted_flights
 
 def get_reason(flight, prefs):
     reasons = []
@@ -465,7 +487,6 @@ def get_date_keyboard():
     return InlineKeyboardMarkup(buttons)
 
 def get_settings_keyboard(user_id):
-    """Создает клавиатуру настроек с текущими значениями"""
     prefs = get_user_preferences(user_id)
     priority = prefs.get('priority', 'balance')
     max_stops = prefs.get('max_stops', 3)
@@ -494,9 +515,9 @@ def get_settings_keyboard(user_id):
     }
     
     buttons = [
-        [InlineKeyboardButton(f"🎯 Приоритет: {priority_names.get(priority, 'Баланс')}", callback_data="settings_priority")],
-        [InlineKeyboardButton(f"🔄 Пересадки: {stops_names.get(max_stops, 'Любые')}", callback_data="settings_stops")],
-        [InlineKeyboardButton(f"⏰ Время: {hours_names.get(pref_hours, 'Любое')}", callback_data="settings_hours")],
+        [InlineKeyboardButton(f"🎯 {priority_names.get(priority, 'Баланс')}", callback_data="settings_priority")],
+        [InlineKeyboardButton(f"🔄 {stops_names.get(max_stops, 'Любые')}", callback_data="settings_stops")],
+        [InlineKeyboardButton(f"⏰ {hours_names.get(pref_hours, 'Любое')}", callback_data="settings_hours")],
         [InlineKeyboardButton("🔄 Сбросить настройки", callback_data="reset_settings")],
         [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
     ]
@@ -1000,23 +1021,39 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         prefs = get_user_preferences(user_id)
+        
+        # Получаем отсортированные рейсы
+        sorted_flights = get_sorted_flights(flights_data, prefs)
         best_overall, cheapest, fastest = get_best_flights(flights_data, prefs)
         
         # Сохраняем в историю
         query_text = f"{from_city} → {to_city} {date}"
         save_search_history(user_id, from_city, to_city, date, query_text, flights_data[:5])
         
-        response = "✈️ *Результаты поиска:*\n\n"
+        # Получаем название приоритета
+        priority_names = {
+            'price': '💰 Цена',
+            'speed': '⚡ Скорость',
+            'comfort': '⭐ Комфорт',
+            'balance': '⚖️ Баланс'
+        }
+        current_priority = prefs.get('priority', 'balance')
+        
+        response = f"✈️ *Результаты поиска:*\n"
+        response += f"🎯 Приоритет: {priority_names.get(current_priority, 'Баланс')}\n\n"
+        
+        # Показываем отсортированный список (первые 5)
+        if sorted_flights:
+            response += f"📋 *Топ {min(5, len(sorted_flights))} вариантов:*\n\n"
+            for i, flight in enumerate(sorted_flights[:5], 1):
+                response += format_flight_card(flight, index=i) + "\n\n"
+        
+        # Отдельно показываем рекомендованный
         if best_overall:
-            response += "⭐ *Лучший вариант (рекомендованный)*\n"
+            response += "⭐ *Рекомендованный вариант:*\n"
             response += format_flight_card(best_overall) + "\n"
             response += f"📌 *Почему:* {get_reason(best_overall, prefs)}\n\n"
-        if cheapest:
-            response += "💰 *Самый дешевый*\n"
-            response += format_flight_card(cheapest) + "\n\n"
-        if fastest:
-            response += "⚡ *Самый быстрый*\n"
-            response += format_flight_card(fastest) + "\n\n"
+        
         response += "💡 Для покупки перейдите на сайт авиакомпании."
         
         await update.callback_query.edit_message_text(response, parse_mode="Markdown")
@@ -1077,22 +1114,35 @@ async def handle_manual_search(update: Update, text, context):
             return
         
         prefs = get_user_preferences(user_id)
+        
+        # Получаем отсортированные рейсы
+        sorted_flights = get_sorted_flights(flights_data, prefs)
         best_overall, cheapest, fastest = get_best_flights(flights_data, prefs)
         
         query_text = f"{from_city} → {to_city} {date}"
         save_search_history(user_id, from_city, to_city, date, query_text, flights_data[:5])
         
-        response = "✈️ *Результаты поиска:*\n\n"
+        priority_names = {
+            'price': '💰 Цена',
+            'speed': '⚡ Скорость',
+            'comfort': '⭐ Комфорт',
+            'balance': '⚖️ Баланс'
+        }
+        current_priority = prefs.get('priority', 'balance')
+        
+        response = f"✈️ *Результаты поиска:*\n"
+        response += f"🎯 Приоритет: {priority_names.get(current_priority, 'Баланс')}\n\n"
+        
+        if sorted_flights:
+            response += f"📋 *Топ {min(5, len(sorted_flights))} вариантов:*\n\n"
+            for i, flight in enumerate(sorted_flights[:5], 1):
+                response += format_flight_card(flight, index=i) + "\n\n"
+        
         if best_overall:
-            response += "⭐ *Лучший вариант (рекомендованный)*\n"
+            response += "⭐ *Рекомендованный вариант:*\n"
             response += format_flight_card(best_overall) + "\n"
             response += f"📌 *Почему:* {get_reason(best_overall, prefs)}\n\n"
-        if cheapest:
-            response += "💰 *Самый дешевый*\n"
-            response += format_flight_card(cheapest) + "\n\n"
-        if fastest:
-            response += "⚡ *Самый быстрый*\n"
-            response += format_flight_card(fastest) + "\n\n"
+        
         response += "💡 Для покупки перейдите на сайт авиакомпании."
         
         await update.message.reply_text(response, parse_mode="Markdown")
