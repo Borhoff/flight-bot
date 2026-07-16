@@ -208,7 +208,6 @@ CITY_TO_IATA, AIRPORT_NAMES = load_airports()
 
 # --- КОНВЕРТЕР НАЗВАНИЙ ГОРОДОВ (РУССКИЙ → АНГЛИЙСКИЙ) ---
 CITY_NAME_CONVERTER = {
-    # Россия
     "москва": "moscow",
     "moscow": "moscow",
     "спб": "saint petersburg",
@@ -239,8 +238,6 @@ CITY_NAME_CONVERTER = {
     "volgograd": "volgograd",
     "нижний новгород": "nizhny novgorod",
     "nizhny novgorod": "nizhny novgorod",
-    
-    # Европа
     "лондон": "london",
     "london": "london",
     "париж": "paris",
@@ -281,8 +278,6 @@ CITY_NAME_CONVERTER = {
     "lisbon": "lisbon",
     "дублин": "dublin",
     "dublin": "dublin",
-    
-    # Азия
     "стамбул": "istanbul",
     "istanbul": "istanbul",
     "дубай": "dubai",
@@ -317,8 +312,6 @@ CITY_NAME_CONVERTER = {
     "mumbai": "mumbai",
     "дель": "delhi",
     "delhi": "delhi",
-    
-    # Америка
     "нью-йорк": "new york",
     "new york": "new york",
     "лос-анджелес": "los angeles",
@@ -343,16 +336,12 @@ CITY_NAME_CONVERTER = {
     "rio de janeiro": "rio de janeiro",
     "буэнос-айрес": "buenos aires",
     "buenos aires": "buenos aires",
-    
-    # Австралия и Океания
     "сидней": "sydney",
     "sydney": "sydney",
     "мельбурн": "melbourne",
     "melbourne": "melbourne",
     "окленд": "auckland",
     "auckland": "auckland",
-    
-    # Африка
     "кейптаун": "cape town",
     "cape town": "cape town",
     "каир": "cairo",
@@ -362,46 +351,29 @@ CITY_NAME_CONVERTER = {
 }
 
 def normalize_city_name(city_name):
-    """Конвертирует название города в английский вариант"""
     if not city_name:
         return city_name
-    
     city_lower = city_name.strip().lower()
-    
-    # Если это IATA-код (3 буквы, заглавные), возвращаем как есть
     if len(city_lower) == 3 and city_name.isupper():
         return city_lower
-    
-    # Ищем в словаре конвертации
     if city_lower in CITY_NAME_CONVERTER:
         return CITY_NAME_CONVERTER[city_lower]
-    
-    # Если не нашли — возвращаем как есть (возможно, уже на английском)
     return city_lower
 
 def find_city_code(city_name):
-    """Ищет IATA-код(ы) по названию города (поддерживает русский и английский)"""
+    """Возвращает ВСЕ IATA-коды аэропортов города"""
     if not city_name:
         return []
-    
-    # Конвертируем название в английский вариант
     normalized = normalize_city_name(city_name)
     city_lower = normalized.lower().strip()
-    
-    # Если это IATA-код (3 буквы, заглавные)
     if len(city_lower) == 3 and city_name.isupper():
         return [city_lower.upper()]
-    
-    # Ищем в базе аэропортов
     if city_lower in CITY_TO_IATA:
         return CITY_TO_IATA[city_lower]
-    
-    # Частичное совпадение
     results = []
     for city, codes in CITY_TO_IATA.items():
         if city_lower in city or city in city_lower:
             results.extend(codes)
-    
     return list(set(results))
 
 def get_airport_name(iata_code):
@@ -757,21 +729,6 @@ def get_city_keyboard(user_id=None):
     buttons.append([InlineKeyboardButton("✈️ Популярные маршруты", callback_data="popular_routes")])
     return InlineKeyboardMarkup(buttons)
 
-def get_airport_choice_keyboard(city_name, codes, city_type):
-    buttons = []
-    for code in codes:
-        airport_name = get_airport_name(code)
-        button_text = f"✈️ {airport_name} ({code})"
-        if city_type == "from":
-            callback_data = f"from_airport_{code}"
-        else:
-            callback_data = f"to_airport_{code}"
-        buttons.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
-    if len(codes) > 1:
-        buttons.append([InlineKeyboardButton("📌 Показать все аэропорты", callback_data=f"all_{city_type}")])
-    buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_cities")])
-    return InlineKeyboardMarkup(buttons)
-
 def get_date_keyboard():
     today = datetime.now().date()
     buttons = [
@@ -976,7 +933,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "✈️ Начать поиск":
         await update.message.reply_text(
             "🌍 *Откуда вылетаем?*\n\n"
-            "Выберите город из списка, введите название города (на русском или английском):\n"
+            "Выберите город из списка или введите название (на русском или английском):\n"
             "Например: *Москва*, *London*, *Нью-Йорк*",
             parse_mode="Markdown",
             reply_markup=get_city_keyboard(user_id)
@@ -1045,48 +1002,49 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✈️ *Как пользоваться ботом:*\n\n"
             "1️⃣ Нажмите *«Начать поиск»*\n"
             "2️⃣ Выберите город вылета (можно ввести название на русском или английском)\n"
-            "3️⃣ Выберите аэропорт вылета\n"
-            "4️⃣ Выберите город прибытия\n"
-            "5️⃣ Выберите аэропорт прибытия\n"
-            "6️⃣ Выберите дату\n"
-            "7️⃣ Получите 3 варианта!\n\n"
+            "3️⃣ Выберите город прибытия\n"
+            "4️⃣ Выберите дату\n"
+            "5️⃣ Получите 3 варианта!\n\n"
             "*Или отправьте запрос вручную:*\n"
             "`LHR → JFK 2026-07-20`\n"
-            "`Москва → Стамбул 2026-07-20`\n"
-            "`Moscow → Istanbul 2026-07-20`"
+            "`Москва → Стамбул 2026-07-20`"
         )
         await update.message.reply_text(help_text, parse_mode="Markdown")
     
     elif user_data.get('state') == 'search_by_city':
         codes = find_city_code(text)
         if codes:
-            city_name = text.strip()
             if user_data.get('city_type') == 'from':
-                user_data['city_name'] = city_name
-                user_data['state'] = 'select_from_airport'
+                user_data['from_city_codes'] = codes
+                user_data['from_city_name'] = text.strip()
+                user_data['state'] = 'to_city'
+                airports_list = ", ".join([f"{get_airport_name(c)} ({c})" for c in codes])
                 await update.message.reply_text(
-                    f"🌍 Найден город: *{city_name}*\n\n"
-                    "✈️ Выберите аэропорт вылета:",
-                    parse_mode="Markdown",
-                    reply_markup=get_airport_choice_keyboard(city_name, codes, "from")
+                    f"✅ Найден город: *{text}*\n"
+                    f"✈️ Аэропорты: {airports_list}\n\n"
+                    "🔍 Буду искать рейсы из всех аэропортов!\n\n"
+                    "🌍 *Куда летим?*\nВведите город прибытия:",
+                    parse_mode="Markdown"
                 )
             else:
-                user_data['city_name'] = city_name
-                user_data['state'] = 'select_to_airport'
+                user_data['to_city_codes'] = codes
+                user_data['to_city_name'] = text.strip()
+                user_data['state'] = 'date'
+                airports_list = ", ".join([f"{get_airport_name(c)} ({c})" for c in codes])
                 await update.message.reply_text(
-                    f"🌍 Найден город: *{city_name}*\n\n"
-                    "✈️ Выберите аэропорт прибытия:",
+                    f"✅ Найден город: *{text}*\n"
+                    f"✈️ Аэропорты: {airports_list}\n\n"
+                    "🔍 Буду искать рейсы во все аэропорты!\n\n"
+                    "📅 *Когда летим?*\nВыберите дату:",
                     parse_mode="Markdown",
-                    reply_markup=get_airport_choice_keyboard(city_name, codes, "to")
+                    reply_markup=get_date_keyboard()
                 )
         else:
             await update.message.reply_text(
                 f"❌ Город *{text}* не найден.\n\n"
                 "Попробуйте:\n"
                 "• Написать на русском (например, Москва)\n"
-                "• Написать на английском (например, Moscow)\n"
-                "• Проверить правильность написания\n"
-                "• Выбрать из списка городов",
+                "• Написать на английском (например, Moscow)",
                 parse_mode="Markdown"
             )
         return
@@ -1095,7 +1053,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         codes = find_city_code(text)
         if codes:
             prefs = get_user_preferences(user_id)
-            # Находим код города (берём первый)
             city_code = codes[0]
             prefs['favorite_city'] = city_code
             save_user_preferences(user_id, prefs)
@@ -1103,7 +1060,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ Избранный город: *{text}* ({city_code})",
                 parse_mode="Markdown"
             )
-            # Показываем настройки
             await update.message.reply_text(
                 "👇 Выберите действие:",
                 reply_markup=get_main_keyboard()
@@ -1111,9 +1067,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(
                 f"❌ Город *{text}* не найден.\n\n"
-                "Попробуйте:\n"
-                "• Написать на русском (например, Москва)\n"
-                "• Написать на английском (например, Moscow)",
+                "Попробуйте на русском или английском.",
                 parse_mode="Markdown"
             )
         return
@@ -1127,13 +1081,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Неправильный формат. Используй: ГГГГ-ММ-ДД")
     
     else:
-        # Проверяем, может это поиск по городу (если пользователь ввел название)
         if len(text) > 3:
             codes = find_city_code(text)
             if codes:
                 await update.message.reply_text(
                     f"🔍 Найден город: *{text}* → коды: {', '.join(codes)}\n\n"
-                    "Выберите город из списка выше или продолжите ввод.",
+                    "Выберите город из списка или продолжите ввод.",
                     parse_mode="Markdown"
                 )
                 return
@@ -1149,75 +1102,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"🔘 Callback: {data} от user {user_id}")
     
-    # --- ВЫБОР АЭРОПОРТА ---
-    if data.startswith("from_airport_"):
-        code = data.replace("from_airport_", "")
-        user_data['from_city'] = code
-        user_data['state'] = 'to_city'
-        await query.edit_message_text(
-            f"✅ Выбран аэропорт вылета: *{get_airport_name(code)} ({code})*\n\n"
-            "🌍 *Куда летим?*\nВыберите город или введите название:",
-            parse_mode="Markdown",
-            reply_markup=get_city_keyboard(user_id)
-        )
-        return
-    
-    elif data.startswith("to_airport_"):
-        code = data.replace("to_airport_", "")
-        user_data['to_city'] = code
-        user_data['state'] = 'date'
-        await query.edit_message_text(
-            f"✅ Выбран аэропорт прибытия: *{get_airport_name(code)} ({code})*\n\n"
-            "📅 *Когда летим?*\nВыберите дату:",
-            parse_mode="Markdown",
-            reply_markup=get_date_keyboard()
-        )
-        return
-    
-    elif data.startswith("all_"):
-        city_type = data.replace("all_", "")
-        codes = find_city_code(user_data.get('city_name', ''))
-        if city_type == "from":
-            code = codes[0] if codes else ""
-            user_data['from_city'] = code
-            user_data['state'] = 'to_city'
-            await query.edit_message_text(
-                f"✅ Выбран аэропорт: *{get_airport_name(code)} ({code})*\n\n"
-                "🌍 *Куда летим?*\nВыберите город:",
-                parse_mode="Markdown",
-                reply_markup=get_city_keyboard(user_id)
-            )
-        else:
-            code = codes[0] if codes else ""
-            user_data['to_city'] = code
-            user_data['state'] = 'date'
-            await query.edit_message_text(
-                f"✅ Выбран аэропорт: *{get_airport_name(code)} ({code})*\n\n"
-                "📅 *Когда летим?*\nВыберите дату:",
-                parse_mode="Markdown",
-                reply_markup=get_date_keyboard()
-            )
-        return
-    
-    elif data == "back_to_cities":
-        user_data['state'] = 'from_city'
-        await query.edit_message_text(
-            "🌍 *Откуда вылетаем?*\n\n"
-            "Выберите город из списка или введите название:",
-            parse_mode="Markdown",
-            reply_markup=get_city_keyboard(user_id)
-        )
-        return
-    
     # --- ПОИСК ПО ГОРОДУ ---
-    elif data == "search_by_city":
+    if data == "search_by_city":
         user_data['state'] = 'search_by_city'
-        if not user_data.get('from_city'):
+        if not user_data.get('from_city_codes'):
             user_data['city_type'] = 'from'
             await query.edit_message_text(
                 "🔍 *Введите название города вылета*\n\n"
                 "Например: *Москва*, *London*, *Нью-Йорк*\n\n"
-                "Я найду IATA-код автоматически.",
+                "Я найду все аэропорты автоматически.",
                 parse_mode="Markdown"
             )
         else:
@@ -1225,7 +1118,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(
                 "🔍 *Введите название города прибытия*\n\n"
                 "Например: *Москва*, *London*, *Нью-Йорк*\n\n"
-                "Я найду IATA-код автоматически.",
+                "Я найду все аэропорты автоматически.",
                 parse_mode="Markdown"
             )
         return
@@ -1252,8 +1145,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data == "settings_favorite_airport":
         await query.edit_message_text(
-            "🛫 *Выберите избранный аэропорт*\n\n"
-            "Рейсы из этого аэропорта будут показываться первыми.",
+            "🛫 *Избранный аэропорт*\n\n"
+            "Рейсы из этого аэропорта будут показываться **первыми** в результатах поиска.\n\n"
+            "Это НЕ ограничивает поиск — бот всё равно ищет рейсы из всех аэропортов города,\n"
+            "но рейсы из избранного аэропорта будут вверху списка.",
             parse_mode="Markdown",
             reply_markup=get_favorite_airport_keyboard(user_id)
         )
@@ -1502,8 +1397,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             date = parts[4]
             
             logger.info(f"🔄 Повтор поиска из истории: {from_city} → {to_city} {date}")
-            user_data['from_city'] = from_city
-            user_data['to_city'] = to_city
+            user_data['from_city_codes'] = [from_city]
+            user_data['to_city_codes'] = [to_city]
             user_data['date'] = date
             
             await query.edit_message_text(f"🔍 Повторяем поиск: {from_city} → {to_city} на {date}")
@@ -1512,8 +1407,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data.startswith("route_"):
         _, from_city, to_city = data.split("_")
-        user_data['from_city'] = from_city
-        user_data['to_city'] = to_city
+        user_data['from_city_codes'] = [from_city]
+        user_data['to_city_codes'] = [to_city]
         user_data['state'] = 'date'
         await query.edit_message_text(
             f"✅ Выбран маршрут: *{from_city} → {to_city}*\n\n"
@@ -1527,23 +1422,31 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         code = data.replace("city_", "")
         codes = find_city_code(code)
         if codes:
-            if not user_data.get('from_city'):
-                user_data['city_name'] = code
-                user_data['state'] = 'select_from_airport'
+            if not user_data.get('from_city_codes'):
+                user_data['from_city_codes'] = codes
+                user_data['from_city_name'] = code
+                user_data['state'] = 'to_city'
+                airports_list = ", ".join([f"{get_airport_name(c)} ({c})" for c in codes])
                 await query.edit_message_text(
-                    f"🌍 Выбран город: *{code}*\n\n"
-                    "✈️ Выберите аэропорт вылета:",
+                    f"✅ Найден город: *{code}*\n"
+                    f"✈️ Аэропорты: {airports_list}\n\n"
+                    "🔍 Буду искать рейсы из всех аэропортов!\n\n"
+                    "🌍 *Куда летим?*\nВыберите город или введите название:",
                     parse_mode="Markdown",
-                    reply_markup=get_airport_choice_keyboard(code, codes, "from")
+                    reply_markup=get_city_keyboard(user_id)
                 )
             else:
-                user_data['city_name'] = code
-                user_data['state'] = 'select_to_airport'
+                user_data['to_city_codes'] = codes
+                user_data['to_city_name'] = code
+                user_data['state'] = 'date'
+                airports_list = ", ".join([f"{get_airport_name(c)} ({c})" for c in codes])
                 await query.edit_message_text(
-                    f"🌍 Выбран город: *{code}*\n\n"
-                    "✈️ Выберите аэропорт прибытия:",
+                    f"✅ Найден город: *{code}*\n"
+                    f"✈️ Аэропорты: {airports_list}\n\n"
+                    "🔍 Буду искать рейсы во все аэропорты!\n\n"
+                    "📅 *Когда летим?*\nВыберите дату:",
                     parse_mode="Markdown",
-                    reply_markup=get_airport_choice_keyboard(code, codes, "to")
+                    reply_markup=get_date_keyboard()
                 )
         return
     
@@ -1557,33 +1460,63 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = context.user_data
     user_id = update.effective_user.id
-    from_city = user_data.get('from_city')
-    to_city = user_data.get('to_city')
+    
+    from_codes = user_data.get('from_city_codes', [])
+    if not from_codes:
+        from_codes = [user_data.get('from_city', '')]
+    
+    to_codes = user_data.get('to_city_codes', [])
+    if not to_codes:
+        to_codes = [user_data.get('to_city', '')]
+    
     date = user_data.get('date')
     
-    logger.info(f"🔍 Поиск: {from_city} → {to_city} {date} (user {user_id})")
+    logger.info(f"🔍 Поиск: {from_codes} → {to_codes} {date} (user {user_id})")
     
-    if not from_city or not to_city or not date:
+    if not from_codes or not to_codes or not date:
         await update.callback_query.edit_message_text("❌ Не все данные введены. Начните заново.")
+        return
+    
+    # Убираем пустые значения
+    from_codes = [c for c in from_codes if c]
+    to_codes = [c for c in to_codes if c]
+    
+    if not from_codes or not to_codes:
+        await update.callback_query.edit_message_text("❌ Не удалось определить аэропорты. Попробуйте выбрать город из списка.")
         return
     
     try:
         await update.callback_query.edit_message_text("🔍 Ищу билеты... Это займет несколько секунд.")
         
-        q = create_query(
-            flights=[FlightQuery(date=date, from_airport=from_city, to_airport=to_city)],
-            seat="economy",
-            trip="one-way",
-            passengers=Passengers(adults=1),
-            language="en-US",
-        )
-        result = get_flights(q)
+        all_flights = []
+        for from_city in from_codes[:3]:  # Ограничиваем количество комбинаций
+            for to_city in to_codes[:3]:
+                try:
+                    q = create_query(
+                        flights=[FlightQuery(date=date, from_airport=from_city, to_airport=to_city)],
+                        seat="economy",
+                        trip="one-way",
+                        passengers=Passengers(adults=1),
+                        language="en-US",
+                    )
+                    result = get_flights(q)
+                    if result and len(result) > 0:
+                        all_flights.extend(result)
+                        logger.info(f"✅ Найдены рейсы {from_city}→{to_city}: {len(result)} шт.")
+                except Exception as e:
+                    logger.error(f"Ошибка поиска {from_city}→{to_city}: {e}")
         
-        if not result or len(result) == 0:
-            await update.callback_query.edit_message_text(f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.")
+        if not all_flights:
+            await update.callback_query.edit_message_text(
+                f"❌ Рейсы не найдены для выбранных направлений.\n\n"
+                "Попробуйте:\n"
+                "• Другую дату\n"
+                "• Другой город\n"
+                "• Проверить написание города"
+            )
             return
         
-        flights_data = parse_flight_data(result)
+        flights_data = parse_flight_data(all_flights)
         if not flights_data:
             await update.callback_query.edit_message_text("❌ Не удалось получить детали рейсов.")
             return
@@ -1594,8 +1527,10 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sorted_flights = get_sorted_flights(flights_data, prefs, favorite_airport)
         best_overall, cheapest, fastest = get_best_flights(flights_data, prefs)
         
-        query_text = f"{from_city} → {to_city} {date}"
-        save_search_history(user_id, from_city, to_city, date, query_text, flights_data[:5])
+        from_name = user_data.get('from_city_name', from_codes[0])
+        to_name = user_data.get('to_city_name', to_codes[0])
+        query_text = f"{from_name} → {to_name} {date}"
+        save_search_history(user_id, from_name, to_name, date, query_text, flights_data[:5])
         
         priority_names = {
             'price': '💰 Цена',
@@ -1605,7 +1540,9 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         current_priority = prefs.get('priority', 'balance')
         
-        response = f"✈️ *Результаты поиска:*\n"
+        response = f"✈️ *Результаты поиска*\n"
+        response += f"📍 {from_name} → {to_name}\n"
+        response += f"📅 {date}\n"
         response += f"🎯 Приоритет: {priority_names.get(current_priority, 'Баланс')}\n"
         if favorite_airport:
             response += f"🛫 Приоритетный аэропорт: {get_airport_name(favorite_airport)} ({favorite_airport})\n"
@@ -1655,27 +1592,46 @@ async def handle_manual_search(update: Update, text, context):
             await update.message.reply_text("❌ Неправильный формат даты. Используй ГГГГ-ММ-ДД")
             return
         
-        context.user_data['from_city'] = from_city
-        context.user_data['to_city'] = to_city
+        # Проверяем, может это города, а не коды
+        from_codes = find_city_code(from_city)
+        if not from_codes:
+            from_codes = [from_city]
+        
+        to_codes = find_city_code(to_city)
+        if not to_codes:
+            to_codes = [to_city]
+        
+        context.user_data['from_city_codes'] = from_codes
+        context.user_data['to_city_codes'] = to_codes
+        context.user_data['from_city_name'] = from_city
+        context.user_data['to_city_name'] = to_city
         context.user_data['date'] = date
         
         user_id = update.effective_user.id
         await update.message.reply_text("🔍 Ищу билеты... Это займет несколько секунд.")
         
-        q = create_query(
-            flights=[FlightQuery(date=date, from_airport=from_city, to_airport=to_city)],
-            seat="economy",
-            trip="one-way",
-            passengers=Passengers(adults=1),
-            language="en-US",
-        )
-        result = get_flights(q)
+        all_flights = []
+        for from_c in from_codes[:3]:
+            for to_c in to_codes[:3]:
+                try:
+                    q = create_query(
+                        flights=[FlightQuery(date=date, from_airport=from_c, to_airport=to_c)],
+                        seat="economy",
+                        trip="one-way",
+                        passengers=Passengers(adults=1),
+                        language="en-US",
+                    )
+                    result = get_flights(q)
+                    if result and len(result) > 0:
+                        all_flights.extend(result)
+                except Exception as e:
+                    logger.error(f"Ошибка поиска {from_c}→{to_c}: {e}")
         
-        if not result or len(result) == 0:
-            await update.message.reply_text(f"❌ Рейсы не найдены для {from_city} → {to_city} на {date}.")
+        if not all_flights:
+            await update.message.reply_text("❌ Рейсы не найдены. Попробуйте другую дату или направление.")
             return
         
-        flights_data = parse_flight_data(result)
+        flights_data = parse_flight_data(all_flights)
         if not flights_data:
             await update.message.reply_text("❌ Не удалось получить детали рейсов.")
             return
@@ -1697,7 +1653,9 @@ async def handle_manual_search(update: Update, text, context):
         }
         current_priority = prefs.get('priority', 'balance')
         
-        response = f"✈️ *Результаты поиска:*\n"
+        response = f"✈️ *Результаты поиска*\n"
+        response += f"📍 {from_city} → {to_city}\n"
+        response += f"📅 {date}\n"
         response += f"🎯 Приоритет: {priority_names.get(current_priority, 'Баланс')}\n"
         if favorite_airport:
             response += f"🛫 Приоритетный аэропорт: {get_airport_name(favorite_airport)} ({favorite_airport})\n"
