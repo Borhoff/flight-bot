@@ -1,4 +1,3 @@
-
 import os
 import logging
 import re
@@ -18,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 USD_TO_RUB = 95.0
 
-# --- FLASK (ДЛЯ RENDER) ---
+# --- FLASK ---
 app_web = Flask(__name__)
 
 @app_web.route('/')
@@ -33,19 +32,18 @@ def run_web_server():
     port = int(os.environ.get("PORT", 10000))
     app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
-# --- АВТОПИНГ (чтобы бот не засыпал) ---
+# --- АВТОПИНГ ---
 def keep_alive():
-    """Пинговать себя каждые 10 минут, чтобы Render не усыплял"""
     url = "http://localhost:10000/"
     while True:
         try:
             requests.get(url, timeout=5)
             print("💓 Пинг отправлен, бот активен")
-        except Exception as e:
-            print(f"⚠️ Ошибка пинга: {e}")
-        time.sleep(600)  # 10 минут
+        except:
+            pass
+        time.sleep(600)
 
-# --- БАЗА ДАННЫХ SQLITE ---
+# --- БАЗА ДАННЫХ ---
 def init_db():
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
@@ -66,6 +64,7 @@ def init_db():
             from_city TEXT,
             to_city TEXT,
             date TEXT,
+            query_text TEXT,
             result TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -101,13 +100,13 @@ def save_user_preferences(user_id, preferences):
     conn.commit()
     conn.close()
 
-def save_search_history(user_id, from_city, to_city, date, result):
+def save_search_history(user_id, from_city, to_city, date, query_text, result):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO search_history (user_id, from_city, to_city, date, result)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (user_id, from_city, to_city, date, json.dumps(result)))
+        INSERT INTO search_history (user_id, from_city, to_city, date, query_text, result)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (user_id, from_city, to_city, date, query_text, json.dumps(result)))
     conn.commit()
     conn.close()
 
@@ -115,12 +114,22 @@ def get_search_history(user_id, limit=10):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT from_city, to_city, date, created_at FROM search_history
+        SELECT id, from_city, to_city, date, query_text, created_at FROM search_history
         WHERE user_id = ? ORDER BY created_at DESC LIMIT ?
     ''', (user_id, limit))
     rows = cursor.fetchall()
     conn.close()
     return rows
+
+def delete_search_history(user_id, history_id=None):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    if history_id:
+        cursor.execute('DELETE FROM search_history WHERE id = ? AND user_id = ?', (history_id, user_id))
+    else:
+        cursor.execute('DELETE FROM search_history WHERE user_id = ?', (user_id,))
+    conn.commit()
+    conn.close()
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 MONTHS_RU = {
@@ -369,7 +378,7 @@ def get_reason(flight, prefs):
         reasons.append("📊 оптимальный баланс цены и комфорта")
     return "✅ " + ", ".join(reasons[:3])
 
-# --- КНОПКИ И ИНТЕРФЕЙС ---
+# --- КНОПКИ ---
 def get_main_keyboard():
     buttons = [
         [KeyboardButton("✈️ Начать поиск")],
@@ -431,6 +440,27 @@ def get_popular_routes():
     buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")])
     return InlineKeyboardMarkup(buttons)
 
+def get_history_keyboard(user_id):
+    """Создает клавиатуру с историей запросов"""
+    history = get_search_history(user_id, limit=10)
+    buttons = []
+    
+    if not history:
+        buttons.append([InlineKeyboardButton("📭 История пуста", callback_data="history_empty")])
+    else:
+        for record in history:
+            hist_id, from_city, to_city, date, query_text, created_at = record
+            # Формируем красивую кнопку
+            created = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S.%f")
+            date_str = created.strftime("%d.%m %H:%M")
+            button_text = f"✈️ {from_city} → {to_city}  {date}  ({date_str})"
+            buttons.append([InlineKeyboardButton(button_text, callback_data=f"history_{hist_id}_{from_city}_{to_city}_{date}")])
+    
+    buttons.append([InlineKeyboardButton("🗑️ Очистить историю", callback_data="history_clear")])
+    buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")])
+    
+    return InlineKeyboardMarkup(buttons)
+
 # --- ОБРАБОТЧИКИ ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     init_db()
@@ -483,16 +513,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     elif text == "📊 История":
-        history = get_search_history(user_id)
-        if not history:
-            await update.message.reply_text("📊 У вас пока нет истории поиска.")
-            return
-        response = "📊 *Ваша история поиска:*\n\n"
-        for from_city, to_city, date, created_at in history[:10]:
-            created = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S.%f")
-            response += f"✈️ {from_city} → {to_city} на {date}\n"
-            response += f"   ⏱ {created.strftime('%d.%m.%Y %H:%M')}\n\n"
-        await update.message.reply_text(response, parse_mode="Markdown")
+        await update.message.reply_text(
+            "📊 *Ваша история поиска:*\n\n"
+            "Нажмите на запрос, чтобы повторить поиск.",
+            parse_mode="Markdown",
+            reply_markup=get_history_keyboard(user_id)
+        )
     
     elif text == "❓ Помощь":
         help_text = (
@@ -558,7 +584,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data == "manual_city":
         user_data['state'] = 'manual_city'
-        if user_data.get('state') == 'from_city' or not user_data.get('from_city'):
+        if not user_data.get('from_city'):
             user_data['city_type'] = 'from'
             await query.edit_message_text(
                 "✏️ Введите IATA-код *города вылета* (3 буквы):\n"
@@ -592,6 +618,34 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    elif data == "history_empty":
+        await query.edit_message_text("📭 История пока пуста. Сделайте свой первый поиск!")
+        return
+    
+    elif data == "history_clear":
+        delete_search_history(user_id)
+        await query.edit_message_text("🗑️ История успешно очищена!")
+        await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
+        return
+    
+    elif data.startswith("history_"):
+        # Формат: history_id_from_to_date
+        parts = data.split("_")
+        if len(parts) >= 5:
+            hist_id = parts[1]
+            from_city = parts[2]
+            to_city = parts[3]
+            date = parts[4]
+            
+            # Сохраняем в user_data и запускаем поиск
+            user_data['from_city'] = from_city
+            user_data['to_city'] = to_city
+            user_data['date'] = date
+            
+            await query.edit_message_text(f"🔍 Повторяем поиск: {from_city} → {to_city} на {date}")
+            await perform_search(update, context)
+        return
+    
     elif data.startswith("route_"):
         _, from_city, to_city = data.split("_")
         user_data['from_city'] = from_city
@@ -607,7 +661,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif data.startswith("city_"):
         code = data.replace("city_", "")
-        if user_data.get('state') == 'from_city' or not user_data.get('from_city'):
+        if not user_data.get('from_city'):
             user_data['from_city'] = code
             user_data['state'] = 'to_city'
             await query.edit_message_text(
@@ -616,7 +670,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=get_city_keyboard()
             )
-        elif user_data.get('state') == 'to_city':
+        else:
             user_data['to_city'] = code
             user_data['state'] = 'date'
             await query.edit_message_text(
@@ -696,7 +750,10 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         prefs = get_user_preferences(user_id)
         best_overall, cheapest, fastest = get_best_flights(flights_data, prefs)
-        save_search_history(user_id, from_city, to_city, date, flights_data[:5])
+        
+        # Сохраняем в историю
+        query_text = f"{from_city} → {to_city} {date}"
+        save_search_history(user_id, from_city, to_city, date, query_text, flights_data[:5])
         
         response = "✈️ *Результаты поиска:*\n\n"
         if best_overall:
@@ -769,7 +826,10 @@ async def handle_manual_search(update: Update, text, context):
         
         prefs = get_user_preferences(user_id)
         best_overall, cheapest, fastest = get_best_flights(flights_data, prefs)
-        save_search_history(user_id, from_city, to_city, date, flights_data[:5])
+        
+        # Сохраняем в историю
+        query_text = f"{from_city} → {to_city} {date}"
+        save_search_history(user_id, from_city, to_city, date, query_text, flights_data[:5])
         
         response = "✈️ *Результаты поиска:*\n\n"
         if best_overall:
@@ -795,7 +855,7 @@ async def handle_manual_search(update: Update, text, context):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
 
-# --- ЗАПУСК БОТА ---
+# --- ЗАПУСК ---
 def run_bot():
     reset_webhook()
     
@@ -813,19 +873,15 @@ def run_bot():
             print("🔄 Перезапуск через 5 секунд...")
             time.sleep(5)
 
-# --- ГЛАВНЫЙ ЗАПУСК ---
 if __name__ == "__main__":
     init_db()
     
-    # Запускаем Flask в отдельном потоке
     web_thread = threading.Thread(target=run_web_server)
     web_thread.daemon = True
     web_thread.start()
     
-    # Запускаем автопинг в отдельном потоке
     ping_thread = threading.Thread(target=keep_alive)
     ping_thread.daemon = True
     ping_thread.start()
     
-    # Запускаем бота
     run_bot()
