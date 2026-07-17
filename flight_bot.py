@@ -390,7 +390,7 @@ WEEKDAYS_RU = {
     0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'
 }
 
-# --- НОВЫЙ АКТУАЛЬНЫЙ СПИСОК ГОРОДОВ ---
+# --- АКТУАЛЬНЫЙ СПИСОК ГОРОДОВ ---
 CITIES = {
     "Стамбул": "IST",
     "Дубай": "DXB",
@@ -1086,16 +1086,42 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Неправильный формат. Используй: ГГГГ-ММ-ДД")
     
     else:
+        # --- ИСПРАВЛЕННАЯ ЛОГИКА РУЧНОГО ВВОДА ГОРОДА ---
         if len(text) > 3:
             codes = find_city_code(text)
             if codes:
-                await update.message.reply_text(
-                    f"🔍 Найден город: *{text}* → коды: {', '.join(codes)}\n\n"
-                    "Выберите город из списка или продолжите ввод.",
-                    parse_mode="Markdown"
-                )
-                return
+                # Проверяем, в каком мы состоянии
+                if user_data.get('state') == 'from_city' or not user_data.get('from_city_codes'):
+                    # Это первый город (вылет)
+                    user_data['from_city_codes'] = codes
+                    user_data['from_city_name'] = text.strip()
+                    user_data['state'] = 'to_city'
+                    airports_list = ", ".join([f"{get_airport_name(c)} ({c})" for c in codes])
+                    await update.message.reply_text(
+                        f"✅ Найден город: *{text}*\n"
+                        f"✈️ Аэропорты: {airports_list}\n\n"
+                        "🔍 Буду искать рейсы из всех аэропортов!\n\n"
+                        "🌍 *Куда летим?*\nВведите город прибытия:",
+                        parse_mode="Markdown"
+                    )
+                    return
+                else:
+                    # Это второй город (прилёт)
+                    user_data['to_city_codes'] = codes
+                    user_data['to_city_name'] = text.strip()
+                    user_data['state'] = 'date'
+                    airports_list = ", ".join([f"{get_airport_name(c)} ({c})" for c in codes])
+                    await update.message.reply_text(
+                        f"✅ Найден город: *{text}*\n"
+                        f"✈️ Аэропорты: {airports_list}\n\n"
+                        "🔍 Буду искать рейсы во все аэропорты!\n\n"
+                        "📅 *Когда летим?*\nВыберите дату:",
+                        parse_mode="Markdown",
+                        reply_markup=get_date_keyboard()
+                    )
+                    return
         
+        # Если не город — пробуем обработать как ручной запрос
         await handle_manual_search(update, text, context)
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
