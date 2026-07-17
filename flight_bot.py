@@ -390,19 +390,24 @@ WEEKDAYS_RU = {
     0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'
 }
 
+# --- НОВЫЙ АКТУАЛЬНЫЙ СПИСОК ГОРОДОВ ---
 CITIES = {
-    "Лондон": "LHR",
-    "Нью-Йорк": "JFK",
-    "Париж": "CDG",
-    "Дубай": "DXB",
     "Стамбул": "IST",
-    "Токио": "NRT",
-    "Сингапур": "SIN",
-    "Сидней": "SYD",
+    "Дубай": "DXB",
+    "Пекин": "PEK",
+    "Шанхай": "PVG",
     "Бангкок": "BKK",
-    "Сеул": "ICN",
-    "Рим": "FCO",
-    "Амстердам": "AMS",
+    "Анталья": "AYT",
+    "Ереван": "EVN",
+    "Астана": "NQZ",
+    "Ташкент": "TAS",
+    "Баку": "GYD",
+    "Тбилиси": "TBS",
+    "Сочи": "AER",
+    "Калининград": "KGD",
+    "Санкт-Петербург": "LED",
+    "Париж": "CDG",
+    "Лондон": "LHR",
 }
 
 def reset_webhook():
@@ -856,19 +861,19 @@ def get_favorite_airport_keyboard(user_id):
 
 def get_popular_routes(user_id=None):
     routes = [
-        ("LHR", "JFK"),
-        ("CDG", "DXB"),
-        ("IST", "LHR"),
-        ("SIN", "SYD"),
-        ("BKK", "ICN"),
-        ("AMS", "FCO"),
+        ("IST", "DXB"),
+        ("IST", "PEK"),
+        ("IST", "BKK"),
+        ("DXB", "BKK"),
+        ("PEK", "BKK"),
+        ("AYT", "IST"),
     ]
     
     if user_id:
         prefs = get_user_preferences(user_id)
         favorite = prefs.get('favorite_city', '')
         if favorite:
-            routes = [(favorite, "JFK"), (favorite, "LHR"), (favorite, "DXB")] + routes
+            routes = [(favorite, "DXB"), (favorite, "IST"), (favorite, "BKK")] + routes
     
     buttons = []
     for from_city, to_city in routes:
@@ -934,7 +939,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "🌍 *Откуда вылетаем?*\n\n"
             "Выберите город из списка или введите название (на русском или английском):\n"
-            "Например: *Москва*, *London*, *Нью-Йорк*",
+            "Например: *Стамбул*, *Dubai*, *Пекин*",
             parse_mode="Markdown",
             reply_markup=get_city_keyboard(user_id)
         )
@@ -1006,8 +1011,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "4️⃣ Выберите дату\n"
             "5️⃣ Получите 3 варианта!\n\n"
             "*Или отправьте запрос вручную:*\n"
-            "`LHR → JFK 2026-07-20`\n"
-            "`Москва → Стамбул 2026-07-20`"
+            "`IST → DXB 2026-07-20`\n"
+            "`Стамбул → Дубай 2026-07-20`"
         )
         await update.message.reply_text(help_text, parse_mode="Markdown")
     
@@ -1043,8 +1048,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"❌ Город *{text}* не найден.\n\n"
                 "Попробуйте:\n"
-                "• Написать на русском (например, Москва)\n"
-                "• Написать на английском (например, Moscow)",
+                "• Написать на русском (например, Стамбул)\n"
+                "• Написать на английском (например, Istanbul)",
                 parse_mode="Markdown"
             )
         return
@@ -1109,7 +1114,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data['city_type'] = 'from'
             await query.edit_message_text(
                 "🔍 *Введите название города вылета*\n\n"
-                "Например: *Москва*, *London*, *Нью-Йорк*\n\n"
+                "Например: *Стамбул*, *Dubai*, *Пекин*\n\n"
                 "Я найду все аэропорты автоматически.",
                 parse_mode="Markdown"
             )
@@ -1117,7 +1122,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data['city_type'] = 'to'
             await query.edit_message_text(
                 "🔍 *Введите название города прибытия*\n\n"
-                "Например: *Москва*, *London*, *Нью-Йорк*\n\n"
+                "Например: *Стамбул*, *Dubai*, *Пекин*\n\n"
                 "Я найду все аэропорты автоматически.",
                 parse_mode="Markdown"
             )
@@ -1137,7 +1142,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data['state'] = 'fav_city_manual'
         await query.edit_message_text(
             "✏️ *Введите название города*\n\n"
-            "Например: *Москва*, *London*, *Нью-Йорк*\n\n"
+            "Например: *Стамбул*, *Dubai*, *Пекин*\n\n"
             "Бот сам найдёт IATA-код.",
             parse_mode="Markdown"
         )
@@ -1477,7 +1482,6 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text("❌ Не все данные введены. Начните заново.")
         return
     
-    # Убираем пустые значения
     from_codes = [c for c in from_codes if c]
     to_codes = [c for c in to_codes if c]
     
@@ -1489,7 +1493,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text("🔍 Ищу билеты... Это займет несколько секунд.")
         
         all_flights = []
-        for from_city in from_codes[:3]:  # Ограничиваем количество комбинаций
+        for from_city in from_codes[:3]:
             for to_city in to_codes[:3]:
                 try:
                     q = create_query(
@@ -1576,7 +1580,7 @@ async def handle_manual_search(update: Update, text, context):
     try:
         parts = text.split("→")
         if len(parts) != 2:
-            await update.message.reply_text("❌ Используй формат: LHR → JFK 2026-07-20")
+            await update.message.reply_text("❌ Используй формат: IST → DXB 2026-07-20")
             return
         
         from_city = parts[0].strip().upper()
