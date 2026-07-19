@@ -163,46 +163,76 @@ def delete_search_history(user_id, history_id=None):
         logger.error(f"❌ Ошибка очистки истории: {e}")
         return False
 
-# --- AVIASALES / TRAVELPAYOUTS API ---
+# --- AVIASALES / TRAVELPAYOUTS GRAPHQL API ---
 def search_aviasales(origin, destination, date):
-    """Поиск билетов через Travelpayouts Data API (prices_for_dates)"""
+    """Поиск билетов через Travelpayouts GraphQL API"""
     try:
-        url = "https://api.travelpayouts.com/aviasales/v3/prices_for_dates"
-        params = {
+        url = "https://api.travelpayouts.com/graphql"
+        
+        query = """
+        query PricesOneWay($origin: String!, $destination: String!, $departMonths: String!) {
+            prices_one_way(
+                params: {
+                    origin: $origin
+                    destination: $destination
+                    depart_months: $departMonths
+                }
+                sorting: VALUE_ASC
+                limit: 100
+            ) {
+                departure_at
+                return_at
+                value
+                airline
+                flight_number
+                ticket_link
+                transfers
+            }
+        }
+        """
+        
+        variables = {
             "origin": origin,
             "destination": destination,
-            "departure_at": date,
-            "one_way": "true",
-            "token": TRAVELPAYOUTS_TOKEN,
-            "currency": "rub",
-            "limit": 100
+            "departMonths": date[:7]  # YYYY-MM
         }
-        response = requests.get(url, params=params, timeout=30)
+        
+        headers = {
+            "Content-Type": "application/json",
+            "X-Access-Token": TRAVELPAYOUTS_TOKEN
+        }
+        
+        payload = {
+            "query": query,
+            "variables": variables
+        }
+        
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
         if response.status_code == 200:
             data = response.json()
-            return data
+            return data.get("data", {})
         return None
     except Exception as e:
-        logger.error(f"Aviasales API error: {e}")
+        logger.error(f"Aviasales GraphQL error: {e}")
         return None
 
 def parse_aviasales_result(data, origin, destination, date):
-    """Парсит ответ Aviasales в единый формат"""
+    """Парсит ответ Aviasales GraphQL в единый формат"""
     if not data:
         return []
     
     flights = []
     try:
-        flights_data = data.get("data", [])
-        for item in flights_data:
-            # Извлекаем данные из ответа
+        prices = data.get("prices_one_way", [])
+        for item in prices:
             airline = item.get("airline", "N/A")
-            price = item.get("price", 0) / 100  # в центах
+            price = item.get("value", 0) / 100
             departure_at = item.get("departure_at", "N/A")
             return_at = item.get("return_at", "N/A")
             flight_number = item.get("flight_number", "")
+            transfers = item.get("transfers", 0)
+            ticket_link = item.get("ticket_link", "")
             
-            # Парсим время
             dep_time = "N/A"
             arr_time = "N/A"
             dep_hour = 12
@@ -232,8 +262,9 @@ def parse_aviasales_result(data, origin, destination, date):
                 ],
                 'total_segments': 1,
                 'total_duration': 0,
-                'stops': 0,
-                'flight_number': flight_number
+                'stops': transfers,
+                'flight_number': flight_number,
+                'ticket_link': ticket_link
             })
     except Exception as e:
         logger.error(f"Aviasales parse error: {e}")
@@ -610,12 +641,10 @@ def format_flight_card_compact(flight, index=None, label=None):
     if label:
         card += f"{label} "
     
-    # Добавляем номер рейса если есть
-    flight_info = flight['airline']
+    airline = flight['airline']
     if flight.get('flight_number'):
-        flight_info += f" {flight['flight_number']}"
-    
-    card += f"✈️ {flight_info} — {price_rub} ₽ (${price_usd})\n"
+        airline += f" {flight['flight_number']}"
+    card += f"✈️ *{airline}* — {price_rub} ₽ (${price_usd})\n"
     
     first_seg = flight['segments'][0]
     last_seg = flight['segments'][-1]
@@ -628,7 +657,7 @@ def format_flight_card_compact(flight, index=None, label=None):
     
     stops = flight['stops']
     if stops == 0:
-        card += f"   🟢 Прямой"
+        card += f"   🟢 *Прямой рейс*"
     else:
         layover_info = []
         for i in range(stops):
@@ -641,7 +670,7 @@ def format_flight_card_compact(flight, index=None, label=None):
                 layover_info.append(f"{seg['to_code']} ({format_duration(layover)})")
             except:
                 layover_info.append(seg['to_code'])
-        card += f"   🔄 {stops} пересадки: {', '.join(layover_info)}"
+        card += f"   🔄 *{stops} пересадки:* {', '.join(layover_info)}"
     
     return card
 
@@ -1582,9 +1611,9 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         all_flights = []
         
-        # 1. Поиск через Google Flights (fast-flights) — ВСЕ аэропорты
-        for from_city in from_codes:  # убрал [:3]
-            for to_city in to_codes:  # убрал [:3]
+        # 1. Google Flights (fast-flights) — все аэропорты + deep_search
+        for from_city in from_codes:
+            for to_city in to_codes:
                 try:
                     q = create_query(
                         flights=[FlightQuery(date=date, from_airport=from_city, to_airport=to_city)],
@@ -1593,7 +1622,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         passengers=Passengers(adults=1),
                         language="en-US",
                     )
-                    result = get_flights(q, deep_search=True)  # добавил deep_search
+                    result = get_flights(q, deep_search=True)
                     if result and len(result) > 0:
                         flights_data = parse_flight_data(result)
                         all_flights.extend(flights_data)
@@ -1601,7 +1630,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"Ошибка Google Flights {from_city}→{to_city}: {e}")
         
-        # 2. Поиск через Aviasales (prices_for_dates)
+        # 2. Aviasales (GraphQL)
         for from_city in from_codes:
             for to_city in to_codes:
                 try:
@@ -1650,13 +1679,13 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response += f"🎯 Приоритет: {priority_names.get(current_priority, 'Баланс')}\n"
         if favorite_airport:
             response += f"🛫 Приоритетный аэропорт: {get_airport_name(favorite_airport)} ({favorite_airport})\n"
-        response += "\n"
+        response += f"\n📋 *Найдено {len(sorted_flights)} вариантов:*\n\n"
         
-        if sorted_flights:
-            response += f"📋 *Топ {min(5, len(sorted_flights))} вариантов:*\n\n"
-            for i, flight in enumerate(sorted_flights[:5], 1):
-                response += format_flight_card_compact(flight, index=i) + "\n\n"
+        # Показываем ВСЕ рейсы
+        for i, flight in enumerate(sorted_flights, 1):
+            response += format_flight_card_compact(flight, index=i) + "\n\n"
         
+        # Рекомендованный вариант
         if best_overall:
             response += "⭐ *Рекомендованный вариант:*\n"
             response += format_flight_card_compact(best_overall) + "\n"
@@ -1753,12 +1782,6 @@ async def handle_manual_search(update: Update, text, context):
             context.user_data.clear()
             return
         
-        flights_data = parse_flight_data(all_flights)
-        if not flights_data:
-            await update.message.reply_text("❌ Не удалось получить детали рейсов.")
-            context.user_data.clear()
-            return
-        
         prefs = get_user_preferences(user_id)
         favorite_airport = prefs.get('favorite_airport', '')
         
@@ -1783,12 +1806,10 @@ async def handle_manual_search(update: Update, text, context):
         response += f"🎯 Приоритет: {priority_names.get(current_priority, 'Баланс')}\n"
         if favorite_airport:
             response += f"🛫 Приоритетный аэропорт: {get_airport_name(favorite_airport)} ({favorite_airport})\n"
-        response += "\n"
+        response += f"\n📋 *Найдено {len(sorted_flights)} вариантов:*\n\n"
         
-        if sorted_flights:
-            response += f"📋 *Топ {min(5, len(sorted_flights))} вариантов:*\n\n"
-            for i, flight in enumerate(sorted_flights[:5], 1):
-                response += format_flight_card_compact(flight, index=i) + "\n\n"
+        for i, flight in enumerate(sorted_flights, 1):
+            response += format_flight_card_compact(flight, index=i) + "\n\n"
         
         if best_overall:
             response += "⭐ *Рекомендованный вариант:*\n"
