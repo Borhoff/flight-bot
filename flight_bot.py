@@ -207,23 +207,35 @@ def search_aviasales(origin, destination, date):
             "variables": variables
         }
         
+        logger.info(f"📡 Aviasales запрос: {origin}→{destination} {date}")
         response = requests.post(url, json=payload, headers=headers, timeout=30)
+        logger.info(f"📡 Aviasales статус: {response.status_code}")
+        
         if response.status_code == 200:
             data = response.json()
+            if "errors" in data:
+                logger.error(f"❌ Aviasales ошибка: {data['errors']}")
+                return None
+            logger.info(f"✅ Aviasales ответ получен")
             return data.get("data", {})
-        return None
+        else:
+            logger.error(f"❌ Aviasales HTTP ошибка: {response.text[:200]}")
+            return None
     except Exception as e:
-        logger.error(f"Aviasales GraphQL error: {e}")
+        logger.error(f"❌ Aviasales ошибка: {e}")
         return None
 
 def parse_aviasales_result(data, origin, destination, date):
     """Парсит ответ Aviasales GraphQL в единый формат"""
     if not data:
+        logger.warning(f"⚠️ Aviasales: нет данных для парсинга")
         return []
     
     flights = []
     try:
         prices = data.get("prices_one_way", [])
+        logger.info(f"📊 Aviasales: найдено {len(prices)} цен")
+        
         for item in prices:
             airline = item.get("airline", "N/A")
             price = item.get("value", 0) / 100
@@ -266,8 +278,9 @@ def parse_aviasales_result(data, origin, destination, date):
                 'flight_number': flight_number,
                 'ticket_link': ticket_link
             })
+            logger.info(f"✈️ Aviasales: найден рейс {airline} {flight_number} за {price} USD")
     except Exception as e:
-        logger.error(f"Aviasales parse error: {e}")
+        logger.error(f"❌ Aviasales парсинг ошибка: {e}")
     
     return flights
 
@@ -1685,10 +1698,8 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date = user_data.get('date')
     
     logger.info(f"🔍 Поиск: {from_codes} → {to_codes} {date} (user {user_id})")
-    
-    # --- ЛОГИРОВАНИЕ КОДОВ ---
-    logger.info(f"🔍 Коды вылета: {from_codes}")
-    logger.info(f"🔍 Коды прилёта: {to_codes}")
+    logger.info(f"📡 Коды вылета: {from_codes}")
+    logger.info(f"📡 Коды прилёта: {to_codes}")
     
     if not from_codes or not to_codes or not date:
         await update.callback_query.edit_message_text("❌ Не все данные введены. Начните заново.")
@@ -1707,8 +1718,10 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text("🔍 Ищу билеты... Это займет несколько секунд.")
         
         all_flights = []
+        google_flights_count = 0
+        aviasales_count = 0
         
-        # 1. Google Flights (fast-flights) — все аэропорты + deep_search
+        # 1. Google Flights (fast-flights)
         for from_city in from_codes:
             for to_city in to_codes:
                 try:
@@ -1719,13 +1732,14 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         passengers=Passengers(adults=1),
                         language="en-US",
                     )
-                    result = get_flights(q, deep_search=True)
+                    result = get_flights(q)  # Убрали deep_search=True
                     if result and len(result) > 0:
                         flights_data = parse_flight_data(result)
                         all_flights.extend(flights_data)
+                        google_flights_count += len(flights_data)
                         logger.info(f"✅ Google Flights: найдены рейсы {from_city}→{to_city}: {len(flights_data)} шт.")
                 except Exception as e:
-                    logger.error(f"Ошибка Google Flights {from_city}→{to_city}: {e}")
+                    logger.error(f"❌ Ошибка Google Flights {from_city}→{to_city}: {e}")
         
         # 2. Aviasales (GraphQL)
         for from_city in from_codes:
@@ -1735,13 +1749,18 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if avia_data:
                         avia_flights = parse_aviasales_result(avia_data, from_city, to_city, date)
                         all_flights.extend(avia_flights)
+                        aviasales_count += len(avia_flights)
                         logger.info(f"✅ Aviasales: найдены рейсы {from_city}→{to_city}: {len(avia_flights)} шт.")
                 except Exception as e:
-                    logger.error(f"Ошибка Aviasales {from_city}→{to_city}: {e}")
+                    logger.error(f"❌ Ошибка Aviasales {from_city}→{to_city}: {e}")
+        
+        logger.info(f"📊 ИТОГО: Google Flights: {google_flights_count}, Aviasales: {aviasales_count}, Всего: {len(all_flights)}")
         
         if not all_flights:
             await update.callback_query.edit_message_text(
                 f"❌ Рейсы не найдены для выбранных направлений.\n\n"
+                f"📊 Google Flights: {google_flights_count} рейсов\n"
+                f"📊 Aviasales: {aviasales_count} рейсов\n\n"
                 "Попробуйте:\n"
                 "• Другую дату\n"
                 "• Другой город\n"
@@ -1844,6 +1863,8 @@ async def handle_manual_search(update: Update, text, context):
         await update.message.reply_text("🔍 Ищу билеты... Это займет несколько секунд.")
         
         all_flights = []
+        google_flights_count = 0
+        aviasales_count = 0
         
         # Google Flights
         for from_c in from_codes:
@@ -1856,10 +1877,11 @@ async def handle_manual_search(update: Update, text, context):
                         passengers=Passengers(adults=1),
                         language="en-US",
                     )
-                    result = get_flights(q, deep_search=True)
+                    result = get_flights(q)  # Убрали deep_search=True
                     if result and len(result) > 0:
                         flights_data = parse_flight_data(result)
                         all_flights.extend(flights_data)
+                        google_flights_count += len(flights_data)
                 except Exception as e:
                     logger.error(f"Ошибка Google Flights {from_c}→{to_c}: {e}")
         
@@ -1871,11 +1893,19 @@ async def handle_manual_search(update: Update, text, context):
                     if avia_data:
                         avia_flights = parse_aviasales_result(avia_data, from_c, to_c, date)
                         all_flights.extend(avia_flights)
+                        aviasales_count += len(avia_flights)
                 except Exception as e:
                     logger.error(f"Ошибка Aviasales {from_c}→{to_c}: {e}")
         
+        logger.info(f"📊 ИТОГО: Google Flights: {google_flights_count}, Aviasales: {aviasales_count}, Всего: {len(all_flights)}")
+        
         if not all_flights:
-            await update.message.reply_text("❌ Рейсы не найдены. Попробуйте другую дату или направление.")
+            await update.message.reply_text(
+                f"❌ Рейсы не найдены.\n\n"
+                f"📊 Google Flights: {google_flights_count} рейсов\n"
+                f"📊 Aviasales: {aviasales_count} рейсов\n\n"
+                "Попробуйте другую дату или направление."
+            )
             context.user_data.clear()
             return
         
