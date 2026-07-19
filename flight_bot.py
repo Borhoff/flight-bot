@@ -934,6 +934,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if text == "✈️ Начать поиск":
+        # --- ПОЛНАЯ ОЧИСТКА ПРИ НОВОМ ПОИСКЕ ---
+        user_data.clear()
         await update.message.reply_text(
             "🌍 *Откуда вылетаем?*\n\n"
             "Выберите город из списка или введите название (на русском или английском):\n"
@@ -1501,6 +1503,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not from_codes or not to_codes or not date:
         await update.callback_query.edit_message_text("❌ Не все данные введены. Начните заново.")
+        user_data.clear()
         return
     
     from_codes = [c for c in from_codes if c]
@@ -1508,6 +1511,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not from_codes or not to_codes:
         await update.callback_query.edit_message_text("❌ Не удалось определить аэропорты. Попробуйте выбрать город из списка.")
+        user_data.clear()
         return
     
     try:
@@ -1539,11 +1543,13 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "• Другой город\n"
                 "• Проверить написание города"
             )
+            user_data.clear()
             return
         
         flights_data = parse_flight_data(all_flights)
         if not flights_data:
             await update.callback_query.edit_message_text("❌ Не удалось получить детали рейсов.")
+            user_data.clear()
             return
         
         prefs = get_user_preferences(user_id)
@@ -1596,18 +1602,21 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"❌ Ошибка поиска: {e}")
         await update.callback_query.edit_message_text(f"❌ Ошибка: {str(e)}")
+        user_data.clear()
 
 async def handle_manual_search(update: Update, text, context):
     try:
         parts = text.split("→")
         if len(parts) != 2:
             await update.message.reply_text("❌ Используй формат: IST → DXB 2026-07-20")
+            context.user_data.clear()
             return
         
         from_city = parts[0].strip().upper()
         rest = parts[1].strip().split(" ")
         if len(rest) < 2:
             await update.message.reply_text("❌ Не указана дата.")
+            context.user_data.clear()
             return
         
         to_city = rest[0].strip().upper()
@@ -1615,6 +1624,7 @@ async def handle_manual_search(update: Update, text, context):
         
         if not re.match(r'\d{4}-\d{2}-\d{2}', date):
             await update.message.reply_text("❌ Неправильный формат даты. Используй ГГГГ-ММ-ДД")
+            context.user_data.clear()
             return
         
         from_codes = find_city_code(from_city)
@@ -1653,11 +1663,13 @@ async def handle_manual_search(update: Update, text, context):
         
         if not all_flights:
             await update.message.reply_text("❌ Рейсы не найдены. Попробуйте другую дату или направление.")
+            context.user_data.clear()
             return
         
         flights_data = parse_flight_data(all_flights)
         if not flights_data:
             await update.message.reply_text("❌ Не удалось получить детали рейсов.")
+            context.user_data.clear()
             return
         
         prefs = get_user_preferences(user_id)
@@ -1707,6 +1719,7 @@ async def handle_manual_search(update: Update, text, context):
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        context.user_data.clear()
 
 # --- ЗАПУСК ---
 def run_bot():
