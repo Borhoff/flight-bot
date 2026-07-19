@@ -194,7 +194,7 @@ def search_aviasales(origin, destination, date):
         variables = {
             "origin": origin,
             "destination": destination,
-            "departDate": date  # полная дата YYYY-MM-DD
+            "departDate": date
         }
         
         headers = {
@@ -295,27 +295,70 @@ def load_airports():
 
 def get_fallback_data():
     city_to_iata = {
-        "москва": ["MOW", "SVO", "DME", "VKO"],
-        "moscow": ["MOW", "SVO", "DME", "VKO"],
-        "лондон": ["LON", "LHR", "LCY", "STN", "LGW"],
-        "london": ["LON", "LHR", "LCY", "STN", "LGW"],
-        "нью-йорк": ["NYC", "JFK", "EWR", "LGA"],
-        "new york": ["NYC", "JFK", "EWR", "LGA"],
+        "москва": ["SVO", "DME", "VKO"],
+        "moscow": ["SVO", "DME", "VKO"],
+        "дубай": ["DXB"],
+        "dubai": ["DXB"],
+        "лондон": ["LHR", "LGW", "STN"],
+        "london": ["LHR", "LGW", "STN"],
+        "нью-йорк": ["JFK", "EWR", "LGA"],
+        "new york": ["JFK", "EWR", "LGA"],
+        "париж": ["CDG", "ORY"],
+        "paris": ["CDG", "ORY"],
+        "стамбул": ["IST"],
+        "istanbul": ["IST"],
+        "пекин": ["PEK"],
+        "beijing": ["PEK"],
+        "шанхай": ["PVG"],
+        "shanghai": ["PVG"],
+        "бангкок": ["BKK"],
+        "bangkok": ["BKK"],
+        "анталья": ["AYT"],
+        "antalya": ["AYT"],
+        "ереван": ["EVN"],
+        "yerevan": ["EVN"],
+        "астана": ["NQZ"],
+        "astana": ["NQZ"],
+        "ташкент": ["TAS"],
+        "tashkent": ["TAS"],
+        "баку": ["GYD"],
+        "baku": ["GYD"],
+        "тбилиси": ["TBS"],
+        "tbilisi": ["TBS"],
+        "сочи": ["AER"],
+        "sochi": ["AER"],
+        "калининград": ["KGD"],
+        "kaliningrad": ["KGD"],
+        "санкт-петербург": ["LED"],
+        "saint petersburg": ["LED"],
     }
     airport_names = {
-        "MOW": "Москва",
         "SVO": "Шереметьево",
         "DME": "Домодедово",
         "VKO": "Внуково",
-        "LON": "Лондон",
+        "DXB": "Дубай",
+        "DWC": "Дубай-Аль-Мактум",
         "LHR": "Хитроу",
-        "LCY": "Лондон-Сити",
-        "STN": "Станстед",
         "LGW": "Гатвик",
-        "NYC": "Нью-Йорк",
+        "STN": "Станстед",
         "JFK": "Кеннеди",
         "EWR": "Ньюарк",
         "LGA": "Ла-Гуардия",
+        "CDG": "Шарль-де-Голль",
+        "ORY": "Орли",
+        "IST": "Стамбул",
+        "PEK": "Пекин",
+        "PVG": "Шанхай Пудун",
+        "BKK": "Бангкок",
+        "AYT": "Анталья",
+        "EVN": "Ереван",
+        "NQZ": "Астана",
+        "TAS": "Ташкент",
+        "GYD": "Баку",
+        "TBS": "Тбилиси",
+        "AER": "Сочи",
+        "KGD": "Калининград",
+        "LED": "Санкт-Петербург",
     }
     return city_to_iata, airport_names
 
@@ -373,12 +416,62 @@ def normalize_city_name(city_name):
 def find_city_code(city_name):
     if not city_name:
         return []
+    
     normalized = normalize_city_name(city_name)
     city_lower = normalized.lower().strip()
+    
+    # --- ПОПУЛЯРНЫЕ ГОРОДА (приоритет) ---
+    popular_cities = {
+        "москва": ["SVO", "DME", "VKO"],
+        "moscow": ["SVO", "DME", "VKO"],
+        "дубай": ["DXB"],
+        "dubai": ["DXB"],
+        "лондон": ["LHR", "LGW", "STN"],
+        "london": ["LHR", "LGW", "STN"],
+        "нью-йорк": ["JFK", "EWR", "LGA"],
+        "new york": ["JFK", "EWR", "LGA"],
+        "париж": ["CDG", "ORY"],
+        "paris": ["CDG", "ORY"],
+        "стамбул": ["IST"],
+        "istanbul": ["IST"],
+        "пекин": ["PEK"],
+        "beijing": ["PEK"],
+        "шанхай": ["PVG"],
+        "shanghai": ["PVG"],
+        "бангкок": ["BKK"],
+        "bangkok": ["BKK"],
+        "анталья": ["AYT"],
+        "antalya": ["AYT"],
+        "ереван": ["EVN"],
+        "yerevan": ["EVN"],
+        "астана": ["NQZ"],
+        "astana": ["NQZ"],
+        "ташкент": ["TAS"],
+        "tashkent": ["TAS"],
+        "баку": ["GYD"],
+        "baku": ["GYD"],
+        "тбилиси": ["TBS"],
+        "tbilisi": ["TBS"],
+        "сочи": ["AER"],
+        "sochi": ["AER"],
+        "калининград": ["KGD"],
+        "kaliningrad": ["KGD"],
+        "санкт-петербург": ["LED"],
+        "saint petersburg": ["LED"],
+    }
+    
+    if city_lower in popular_cities:
+        return popular_cities[city_lower]
+    
+    # --- IATA-код (3 буквы) ---
     if len(city_lower) == 3 and city_name.isupper():
         return [city_lower.upper()]
+    
+    # --- ПОИСК В БАЗЕ ---
     if city_lower in CITY_TO_IATA:
         return CITY_TO_IATA[city_lower]
+    
+    # --- ЧАСТИЧНОЕ СОВПАДЕНИЕ ---
     results = []
     for city, codes in CITY_TO_IATA.items():
         if city_lower in city or city in city_lower:
@@ -1592,6 +1685,10 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     date = user_data.get('date')
     
     logger.info(f"🔍 Поиск: {from_codes} → {to_codes} {date} (user {user_id})")
+    
+    # --- ЛОГИРОВАНИЕ КОДОВ ---
+    logger.info(f"🔍 Коды вылета: {from_codes}")
+    logger.info(f"🔍 Коды прилёта: {to_codes}")
     
     if not from_codes or not to_codes or not date:
         await update.callback_query.edit_message_text("❌ Не все данные введены. Начните заново.")
