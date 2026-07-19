@@ -165,21 +165,22 @@ def delete_search_history(user_id, history_id=None):
 
 # --- AVIASALES / TRAVELPAYOUTS API ---
 def search_aviasales(origin, destination, date):
-    """Поиск билетов через Travelpayouts Data API"""
+    """Поиск билетов через Travelpayouts Data API (prices_for_dates)"""
     try:
-        url = "http://api.travelpayouts.com/v1/prices/cheap"
+        url = "https://api.travelpayouts.com/aviasales/v3/prices_for_dates"
         params = {
             "origin": origin,
             "destination": destination,
-            "depart_date": date,
+            "departure_at": date,
+            "one_way": "true",
             "token": TRAVELPAYOUTS_TOKEN,
-            "currency": "rub"
+            "currency": "rub",
+            "limit": 100
         }
         response = requests.get(url, params=params, timeout=30)
         if response.status_code == 200:
             data = response.json()
-            if data.get("success"):
-                return data.get("data", {})
+            return data
         return None
     except Exception as e:
         logger.error(f"Aviasales API error: {e}")
@@ -192,27 +193,48 @@ def parse_aviasales_result(data, origin, destination, date):
     
     flights = []
     try:
-        if destination in data and origin in data[destination]:
-            prices = data[destination][origin]
-            for price_data in prices:
-                flights.append({
-                    'airline': price_data.get('airline', 'N/A'),
-                    'price_usd': price_data.get('price', 0) / 100,
-                    'segments': [
-                        {
-                            'from_code': origin,
-                            'to_code': destination,
-                            'departure': price_data.get('departure_at', 'N/A'),
-                            'arrival': price_data.get('return_at', 'N/A'),
-                            'duration': 0,
-                            'departure_hour': 12
-                        }
-                    ],
-                    'total_segments': 1,
-                    'total_duration': 0,
-                    'stops': 0,
-                    'source': 'Aviasales'
-                })
+        flights_data = data.get("data", [])
+        for item in flights_data:
+            # Извлекаем данные из ответа
+            airline = item.get("airline", "N/A")
+            price = item.get("price", 0) / 100  # в центах
+            departure_at = item.get("departure_at", "N/A")
+            return_at = item.get("return_at", "N/A")
+            flight_number = item.get("flight_number", "")
+            
+            # Парсим время
+            dep_time = "N/A"
+            arr_time = "N/A"
+            dep_hour = 12
+            try:
+                if departure_at != "N/A":
+                    dt = datetime.fromisoformat(departure_at.replace("Z", "+00:00"))
+                    dep_time = dt.strftime("%Y-%m-%d %H:%M")
+                    dep_hour = dt.hour
+                if return_at != "N/A":
+                    dt = datetime.fromisoformat(return_at.replace("Z", "+00:00"))
+                    arr_time = dt.strftime("%Y-%m-%d %H:%M")
+            except:
+                pass
+            
+            flights.append({
+                'airline': airline,
+                'price_usd': price,
+                'segments': [
+                    {
+                        'from_code': origin,
+                        'to_code': destination,
+                        'departure': dep_time,
+                        'arrival': arr_time,
+                        'duration': 0,
+                        'departure_hour': dep_hour
+                    }
+                ],
+                'total_segments': 1,
+                'total_duration': 0,
+                'stops': 0,
+                'flight_number': flight_number
+            })
     except Exception as e:
         logger.error(f"Aviasales parse error: {e}")
     
@@ -588,7 +610,12 @@ def format_flight_card_compact(flight, index=None, label=None):
     if label:
         card += f"{label} "
     
-    card += f"✈️ {flight['airline']} — {price_rub} ₽ (${price_usd})\n"
+    # Добавляем номер рейса если есть
+    flight_info = flight['airline']
+    if flight.get('flight_number'):
+        flight_info += f" {flight['flight_number']}"
+    
+    card += f"✈️ {flight_info} — {price_rub} ₽ (${price_usd})\n"
     
     first_seg = flight['segments'][0]
     last_seg = flight['segments'][-1]
@@ -707,17 +734,16 @@ def get_reason_compact(flight, prefs):
 
 def get_priority_keyboard():
     buttons = [
-        [InlineKeyboardButton("💰 Цена", callback_data="priority_price")],
-        [InlineKeyboardButton("  Самые дешёвые билеты", callback_data="priority_price_sub")],
-        [InlineKeyboardButton("⚡ Скорость", callback_data="priority_speed")],
-        [InlineKeyboardButton("  Самые быстрые перелёты", callback_data="priority_speed_sub")],
-        [InlineKeyboardButton("⭐ Комфорт", callback_data="priority_comfort")],
-        [InlineKeyboardButton("  Минимум пересадок", callback_data="priority_comfort_sub")],
-        [InlineKeyboardButton("🛋️ Удобство", callback_data="priority_convenience")],
-        [InlineKeyboardButton("  Короткие пересадки + удобное время", callback_data="priority_convenience_sub")],
-        [InlineKeyboardButton("⚖️ Баланс", callback_data="priority_balance")],
-        [InlineKeyboardButton("  Оптимальное сочетание", callback_data="priority_balance_sub")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="settings_back")]
+        [
+            InlineKeyboardButton("💰 Цена", callback_data="priority_price"),
+            InlineKeyboardButton("⚡ Скорость", callback_data="priority_speed"),
+            InlineKeyboardButton("⭐ Комфорт", callback_data="priority_comfort")
+        ],
+        [
+            InlineKeyboardButton("🛋️ Удобство", callback_data="priority_convenience"),
+            InlineKeyboardButton("⚖️ Баланс", callback_data="priority_balance"),
+            InlineKeyboardButton("◀️ Назад", callback_data="settings_back")
+        ]
     ]
     return InlineKeyboardMarkup(buttons)
 
@@ -1541,7 +1567,8 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not from_codes or not to_codes or not date:
         await update.callback_query.edit_message_text("❌ Не все данные введены. Начните заново.")
         user_data.clear()
-        return    
+        return
+    
     from_codes = [c for c in from_codes if c]
     to_codes = [c for c in to_codes if c]
     
@@ -1555,9 +1582,9 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         all_flights = []
         
-        # 1. Поиск через Google Flights (fast-flights)
-        for from_city in from_codes[:3]:
-            for to_city in to_codes[:3]:
+        # 1. Поиск через Google Flights (fast-flights) — ВСЕ аэропорты
+        for from_city in from_codes:  # убрал [:3]
+            for to_city in to_codes:  # убрал [:3]
                 try:
                     q = create_query(
                         flights=[FlightQuery(date=date, from_airport=from_city, to_airport=to_city)],
@@ -1566,7 +1593,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         passengers=Passengers(adults=1),
                         language="en-US",
                     )
-                    result = get_flights(q)
+                    result = get_flights(q, deep_search=True)  # добавил deep_search
                     if result and len(result) > 0:
                         flights_data = parse_flight_data(result)
                         all_flights.extend(flights_data)
@@ -1574,9 +1601,9 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"Ошибка Google Flights {from_city}→{to_city}: {e}")
         
-        # 2. Поиск через Aviasales
-        for from_city in from_codes[:3]:
-            for to_city in to_codes[:3]:
+        # 2. Поиск через Aviasales (prices_for_dates)
+        for from_city in from_codes:
+            for to_city in to_codes:
                 try:
                     avia_data = search_aviasales(from_city, to_city, date)
                     if avia_data:
@@ -1693,8 +1720,8 @@ async def handle_manual_search(update: Update, text, context):
         all_flights = []
         
         # Google Flights
-        for from_c in from_codes[:3]:
-            for to_c in to_codes[:3]:
+        for from_c in from_codes:
+            for to_c in to_codes:
                 try:
                     q = create_query(
                         flights=[FlightQuery(date=date, from_airport=from_c, to_airport=to_c)],
@@ -1703,7 +1730,7 @@ async def handle_manual_search(update: Update, text, context):
                         passengers=Passengers(adults=1),
                         language="en-US",
                     )
-                    result = get_flights(q)
+                    result = get_flights(q, deep_search=True)
                     if result and len(result) > 0:
                         flights_data = parse_flight_data(result)
                         all_flights.extend(flights_data)
@@ -1711,8 +1738,8 @@ async def handle_manual_search(update: Update, text, context):
                     logger.error(f"Ошибка Google Flights {from_c}→{to_c}: {e}")
         
         # Aviasales
-        for from_c in from_codes[:3]:
-            for to_c in to_codes[:3]:
+        for from_c in from_codes:
+            for to_c in to_codes:
                 try:
                     avia_data = search_aviasales(from_c, to_c, date)
                     if avia_data:
