@@ -16,8 +16,12 @@ from fast_flights import FlightQuery, Passengers, create_query, get_flights
 # --- НАСТРОЙКА ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 USD_TO_RUB = 95.0
+
+# --- TRAVELPAYOUTS / AVIASALES ---
+TRAVELPAYOUTS_TOKEN = "eb631f12ac7f83fda4125614a6dd04bc"
 
 # --- FLASK ---
 app_web = Flask(__name__)
@@ -159,6 +163,61 @@ def delete_search_history(user_id, history_id=None):
         logger.error(f"❌ Ошибка очистки истории: {e}")
         return False
 
+# --- AVIASALES / TRAVELPAYOUTS API ---
+def search_aviasales(origin, destination, date):
+    """Поиск билетов через Travelpayouts Data API"""
+    try:
+        url = "http://api.travelpayouts.com/v1/prices/cheap"
+        params = {
+            "origin": origin,
+            "destination": destination,
+            "depart_date": date,
+            "token": TRAVELPAYOUTS_TOKEN,
+            "currency": "rub"
+        }
+        response = requests.get(url, params=params, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("success"):
+                return data.get("data", {})
+        return None
+    except Exception as e:
+        logger.error(f"Aviasales API error: {e}")
+        return None
+
+def parse_aviasales_result(data, origin, destination, date):
+    """Парсит ответ Aviasales в единый формат"""
+    if not data:
+        return []
+    
+    flights = []
+    try:
+        if destination in data and origin in data[destination]:
+            prices = data[destination][origin]
+            for price_data in prices:
+                flights.append({
+                    'airline': price_data.get('airline', 'N/A'),
+                    'price_usd': price_data.get('price', 0) / 100,
+                    'segments': [
+                        {
+                            'from_code': origin,
+                            'to_code': destination,
+                            'departure': price_data.get('departure_at', 'N/A'),
+                            'arrival': price_data.get('return_at', 'N/A'),
+                            'duration': 0,
+                            'departure_hour': 12
+                        }
+                    ],
+                    'total_segments': 1,
+                    'total_duration': 0,
+                    'stops': 0,
+                    'source': 'Aviasales'
+                })
+    except Exception as e:
+        logger.error(f"Aviasales parse error: {e}")
+    
+    return flights
+
 # --- БАЗА АЭРОПОРТОВ ---
 def load_airports():
     city_to_iata = {}
@@ -183,21 +242,24 @@ def load_airports():
 
 def get_fallback_data():
     city_to_iata = {
-        "москва": ["SVO", "DME", "VKO"],
-        "moscow": ["SVO", "DME", "VKO"],
-        "лондон": ["LHR", "LCY", "STN", "LGW"],
-        "london": ["LHR", "LCY", "STN", "LGW"],
-        "нью-йорк": ["JFK", "EWR", "LGA"],
-        "new york": ["JFK", "EWR", "LGA"],
+        "москва": ["MOW", "SVO", "DME", "VKO"],
+        "moscow": ["MOW", "SVO", "DME", "VKO"],
+        "лондон": ["LON", "LHR", "LCY", "STN", "LGW"],
+        "london": ["LON", "LHR", "LCY", "STN", "LGW"],
+        "нью-йорк": ["NYC", "JFK", "EWR", "LGA"],
+        "new york": ["NYC", "JFK", "EWR", "LGA"],
     }
     airport_names = {
+        "MOW": "Москва",
         "SVO": "Шереметьево",
         "DME": "Домодедово",
         "VKO": "Внуково",
+        "LON": "Лондон",
         "LHR": "Хитроу",
         "LCY": "Лондон-Сити",
         "STN": "Станстед",
         "LGW": "Гатвик",
+        "NYC": "Нью-Йорк",
         "JFK": "Кеннеди",
         "EWR": "Ньюарк",
         "LGA": "Ла-Гуардия",
@@ -206,148 +268,43 @@ def get_fallback_data():
 
 CITY_TO_IATA, AIRPORT_NAMES = load_airports()
 
-# --- КОНВЕРТЕР НАЗВАНИЙ ГОРОДОВ (РУССКИЙ → АНГЛИЙСКИЙ) ---
+# --- КОНВЕРТЕР ---
 CITY_NAME_CONVERTER = {
     "москва": "moscow",
     "moscow": "moscow",
-    "спб": "saint petersburg",
-    "санкт-петербург": "saint petersburg",
-    "saint petersburg": "saint petersburg",
-    "st petersburg": "saint petersburg",
-    "екатеринбург": "yekaterinburg",
-    "yekaterinburg": "yekaterinburg",
-    "новосибирск": "novosibirsk",
-    "novosibirsk": "novosibirsk",
-    "владивосток": "vladivostok",
-    "vladivostok": "vladivostok",
-    "сочи": "sochi",
-    "sochi": "sochi",
-    "казань": "kazan",
-    "kazan": "kazan",
-    "ростов": "rostov",
-    "rostov": "rostov",
-    "краснодар": "krasnodar",
-    "krasnodar": "krasnodar",
-    "самара": "samara",
-    "samara": "samara",
-    "уфа": "ufa",
-    "ufa": "ufa",
-    "пермь": "perm",
-    "perm": "perm",
-    "волгоград": "volgograd",
-    "volgograd": "volgograd",
-    "нижний новгород": "nizhny novgorod",
-    "nizhny novgorod": "nizhny novgorod",
     "лондон": "london",
     "london": "london",
     "париж": "paris",
     "paris": "paris",
-    "берлин": "berlin",
-    "berlin": "berlin",
-    "рим": "rome",
-    "rome": "rome",
-    "мадрид": "madrid",
-    "madrid": "madrid",
-    "барселона": "barcelona",
-    "barcelona": "barcelona",
-    "милан": "milan",
-    "milan": "milan",
-    "вен": "vienna",
-    "vienna": "vienna",
-    "прага": "prague",
-    "prague": "prague",
-    "варшава": "warsaw",
-    "warsaw": "warsaw",
-    "будапешт": "budapest",
-    "budapest": "budapest",
-    "амстердам": "amsterdam",
-    "amsterdam": "amsterdam",
-    "брюссель": "brussels",
-    "brussels": "brussels",
-    "осло": "oslo",
-    "oslo": "oslo",
-    "стокгольм": "stockholm",
-    "stockholm": "stockholm",
-    "копенгаген": "copenhagen",
-    "copenhagen": "copenhagen",
-    "хельсинки": "helsinki",
-    "helsinki": "helsinki",
-    "афины": "athens",
-    "athens": "athens",
-    "лисабон": "lisbon",
-    "lisbon": "lisbon",
-    "дублин": "dublin",
-    "dublin": "dublin",
     "стамбул": "istanbul",
     "istanbul": "istanbul",
     "дубай": "dubai",
     "dubai": "dubai",
-    "токио": "tokyo",
-    "tokyo": "tokyo",
-    "сеул": "seoul",
-    "seoul": "seoul",
-    "сингапур": "singapore",
-    "singapore": "singapore",
-    "бангкок": "bangkok",
-    "bangkok": "bangkok",
     "пекин": "beijing",
     "beijing": "beijing",
     "шанхай": "shanghai",
     "shanghai": "shanghai",
-    "гонконг": "hong kong",
-    "hong kong": "hong kong",
-    "тайбэй": "taipei",
-    "taipei": "taipei",
-    "джакарта": "jakarta",
-    "jakarta": "jakarta",
-    "куала-лумпур": "kuala lumpur",
-    "kuala lumpur": "kuala lumpur",
-    "манила": "manila",
-    "manila": "manila",
-    "ханой": "hanoi",
-    "hanoi": "hanoi",
-    "хошимин": "ho chi minh city",
-    "ho chi minh city": "ho chi minh city",
-    "мумбаи": "mumbai",
-    "mumbai": "mumbai",
-    "дель": "delhi",
-    "delhi": "delhi",
-    "нью-йорк": "new york",
-    "new york": "new york",
-    "лос-анджелес": "los angeles",
-    "los angeles": "los angeles",
-    "чикаго": "chicago",
-    "chicago": "chicago",
-    "майами": "miami",
-    "miami": "miami",
-    "торонто": "toronto",
-    "toronto": "toronto",
-    "ванкувер": "vancouver",
-    "vancouver": "vancouver",
-    "мехико": "mexico city",
-    "mexico city": "mexico city",
-    "сан-франциско": "san francisco",
-    "san francisco": "san francisco",
-    "бостон": "boston",
-    "boston": "boston",
-    "вашингтон": "washington",
-    "washington": "washington",
-    "рио-де-жанейро": "rio de janeiro",
-    "rio de janeiro": "rio de janeiro",
-    "буэнос-айрес": "buenos aires",
-    "buenos aires": "buenos aires",
-    "сидней": "sydney",
-    "sydney": "sydney",
-    "мельбурн": "melbourne",
-    "melbourne": "melbourne",
-    "окленд": "auckland",
-    "auckland": "auckland",
-    "кейптаун": "cape town",
-    "cape town": "cape town",
-    "каир": "cairo",
-    "cairo": "cairo",
-    "найроби": "nairobi",
-    "nairobi": "nairobi",
+    "бангкок": "bangkok",
+    "bangkok": "bangkok",
+    "анья": "antalya",
+    "antalya": "antalya",
+    "ереван": "yerevan",
+    "yerevan": "yerevan",
+    "астана": "astana",
+    "astana": "astana",
+    "ташкент": "tashkent",
+    "tashkent": "tashkent",
+    "баку": "baku",
+    "baku": "baku",
+    "тбилиси": "tbilisi",
+    "tbilisi": "tbilisi",
+    "сочи": "sochi",
+    "sochi": "sochi",
+    "калининград": "kaliningrad",
+    "kaliningrad": "kaliningrad",
+    "санкт-петербург": "saint petersburg",
+    "saint petersburg": "saint petersburg",
+    "спб": "saint petersburg",
 }
 
 def normalize_city_name(city_name):
@@ -378,7 +335,7 @@ def find_city_code(city_name):
 def get_airport_name(iata_code):
     return AIRPORT_NAMES.get(iata_code, iata_code)
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+# --- ВСПОМОГАТЕЛЬНЫЕ ---
 MONTHS_RU = {
     1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля',
     5: 'мая', 6: 'июня', 7: 'июля', 8: 'августа',
@@ -571,7 +528,22 @@ def rate_flight(flight, user_preferences):
     else:
         score += 5
     
+    # Штраф за долгие пересадки
+    if len(flight['segments']) > 1:
+        for i in range(len(flight['segments']) - 1):
+            try:
+                arr1 = datetime.strptime(flight['segments'][i]['arrival'], "%Y-%m-%d %H:%M")
+                dep2 = datetime.strptime(flight['segments'][i+1]['departure'], "%Y-%m-%d %H:%M")
+                layover = (dep2 - arr1).total_seconds() / 60
+                if layover > 480:
+                    score -= 10
+                elif layover > 240:
+                    score -= 5
+            except:
+                pass
+    
     priority = user_preferences.get('priority', 'balance')
+    
     if priority == 'price':
         score = score * 0.6 + max(0, (100 - price / 5)) * 0.4
     elif priority == 'speed':
@@ -579,32 +551,70 @@ def rate_flight(flight, user_preferences):
     elif priority == 'comfort':
         comfort_score = 100 - stops * 20
         score = score * 0.5 + comfort_score * 0.5
+    elif priority == 'convenience':
+        convenience_score = 100
+        convenience_score -= stops * 15
+        if len(flight['segments']) > 0:
+            dep_hour = flight['segments'][0].get('departure_hour', 12)
+            if not (6 <= dep_hour <= 22):
+                convenience_score -= 20
+        if len(flight['segments']) > 1:
+            for i in range(len(flight['segments']) - 1):
+                try:
+                    arr1 = datetime.strptime(flight['segments'][i]['arrival'], "%Y-%m-%d %H:%M")
+                    dep2 = datetime.strptime(flight['segments'][i+1]['departure'], "%Y-%m-%d %H:%M")
+                    layover = (dep2 - arr1).total_seconds() / 60
+                    if layover > 480:
+                        convenience_score -= 20
+                    elif layover > 240:
+                        convenience_score -= 10
+                    elif layover > 120:
+                        convenience_score -= 5
+                except:
+                    pass
+        score = score * 0.3 + convenience_score * 0.7
+    else:
+        score = score * 0.5 + max(0, (100 - price / 8)) * 0.3 + max(0, (100 - total_duration / 8)) * 0.2
     
     return min(100, max(0, score))
 
-def format_flight_card(flight, index=None):
+def format_flight_card_compact(flight, index=None, label=None):
     price_usd = flight['price_usd']
     price_rub = int(price_usd * USD_TO_RUB) if price_usd != 'N/A' else 'N/A'
     
     card = ""
     if index:
         card += f"*{index}.* "
+    if label:
+        card += f"{label} "
     
-    card += f"✈️ *{flight['airline']}* — {price_rub} ₽ (${price_usd})\n"
+    card += f"✈️ {flight['airline']} — {price_rub} ₽ (${price_usd})\n"
     
-    for j, seg in enumerate(flight['segments'], 1):
-        dep = format_date_with_weekday(seg['departure']) if seg['departure'] != 'N/A' else 'N/A'
-        arr = format_date_with_weekday(seg['arrival']) if seg['arrival'] != 'N/A' else 'N/A'
-        dur = format_duration(seg['duration'])
-        from_name = get_airport_name(seg['from_code'])
-        to_name = get_airport_name(seg['to_code'])
-        card += f"   {from_name} ({seg['from_code']}) → {to_name} ({seg['to_code']})  🛫 {dep}  🛬 {arr}  ⏱ {dur}\n"
+    first_seg = flight['segments'][0]
+    last_seg = flight['segments'][-1]
+    
+    dep = format_date_with_weekday(first_seg['departure']) if first_seg['departure'] != 'N/A' else 'N/A'
+    arr = format_date_with_weekday(last_seg['arrival']) if last_seg['arrival'] != 'N/A' else 'N/A'
+    total = format_duration(flight['total_duration'])
+    
+    card += f"   {first_seg['from_code']} → {last_seg['to_code']}  🛫 {dep}  🛬 {arr}  ⏱ {total}\n"
     
     stops = flight['stops']
     if stops == 0:
-        card += f"   🟢 *Прямой рейс*"
+        card += f"   🟢 Прямой"
     else:
-        card += f"   🔄 *{stops} пересадки*"
+        layover_info = []
+        for i in range(stops):
+            seg = flight['segments'][i]
+            next_seg = flight['segments'][i+1]
+            try:
+                arr_time = datetime.strptime(seg['arrival'], "%Y-%m-%d %H:%M")
+                dep_time = datetime.strptime(next_seg['departure'], "%Y-%m-%d %H:%M")
+                layover = (dep_time - arr_time).total_seconds() / 60
+                layover_info.append(f"{seg['to_code']} ({format_duration(layover)})")
+            except:
+                layover_info.append(seg['to_code'])
+        card += f"   🔄 {stops} пересадки: {', '.join(layover_info)}"
     
     return card
 
@@ -659,37 +669,57 @@ def get_sorted_flights(flights_data, user_preferences, favorite_airport=None):
         sorted_flights = sorted(filtered, key=lambda x: x['total_duration'])
     elif priority == 'comfort':
         sorted_flights = sorted(filtered, key=lambda x: x['stops'])
+    elif priority == 'convenience':
+        sorted_flights = sorted(filtered, key=lambda x: x['score'], reverse=True)
     else:
         sorted_flights = sorted(filtered, key=lambda x: x['score'], reverse=True)
     
     return sorted_flights
 
-def get_reason(flight, prefs):
+def get_reason_compact(flight, prefs):
     reasons = []
     if flight['stops'] == 0:
-        reasons.append("✈️ прямой рейс без пересадок")
+        reasons.append("✈️ прямой")
     elif flight['stops'] == 1:
-        reasons.append("🔄 только 1 пересадка")
+        reasons.append("🔄 1 пересадка")
     price = flight['price_usd']
     if price < 300:
-        reasons.append("💰 отличная цена")
+        reasons.append("💰 дешёвый")
     elif price < 500:
-        reasons.append("💰 хорошая цена")
+        reasons.append("💰 средний")
     duration = flight['total_duration']
     if duration < 180:
-        reasons.append("⚡ очень быстро")
+        reasons.append("⚡ быстрый")
     elif duration < 360:
-        reasons.append("⚡ быстро")
+        reasons.append("⚡ средний")
     priority = prefs.get('priority', 'balance')
     if priority == 'price':
-        reasons.append("📊 лучшая цена среди вариантов")
+        reasons.append("📊 цена")
     elif priority == 'speed':
-        reasons.append("📊 самый быстрый вариант")
+        reasons.append("📊 скорость")
     elif priority == 'comfort':
-        reasons.append("📊 оптимальный комфорт")
+        reasons.append("📊 комфорт")
+    elif priority == 'convenience':
+        reasons.append("📊 удобство")
     else:
-        reasons.append("📊 оптимальный баланс цены и комфорта")
+        reasons.append("📊 баланс")
     return "✅ " + ", ".join(reasons[:3])
+
+def get_priority_keyboard():
+    buttons = [
+        [InlineKeyboardButton("💰 Цена", callback_data="priority_price")],
+        [InlineKeyboardButton("  Самые дешёвые билеты", callback_data="priority_price_sub")],
+        [InlineKeyboardButton("⚡ Скорость", callback_data="priority_speed")],
+        [InlineKeyboardButton("  Самые быстрые перелёты", callback_data="priority_speed_sub")],
+        [InlineKeyboardButton("⭐ Комфорт", callback_data="priority_comfort")],
+        [InlineKeyboardButton("  Минимум пересадок", callback_data="priority_comfort_sub")],
+        [InlineKeyboardButton("🛋️ Удобство", callback_data="priority_convenience")],
+        [InlineKeyboardButton("  Короткие пересадки + удобное время", callback_data="priority_convenience_sub")],
+        [InlineKeyboardButton("⚖️ Баланс", callback_data="priority_balance")],
+        [InlineKeyboardButton("  Оптимальное сочетание", callback_data="priority_balance_sub")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="settings_back")]
+    ]
+    return InlineKeyboardMarkup(buttons)
 
 # --- КНОПКИ ---
 def get_main_keyboard():
@@ -754,6 +784,7 @@ def get_settings_keyboard(user_id):
         'price': '💰 Цена',
         'speed': '⚡ Скорость',
         'comfort': '⭐ Комфорт',
+        'convenience': '🛋️ Удобство',
         'balance': '⚖️ Баланс'
     }
     
@@ -789,16 +820,6 @@ def get_settings_keyboard(user_id):
         [InlineKeyboardButton(f"🛫 Аэропорт: {fav_airport_name}", callback_data="settings_favorite_airport")],
         [InlineKeyboardButton("🔄 Сбросить настройки", callback_data="reset_settings")],
         [InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")]
-    ]
-    return InlineKeyboardMarkup(buttons)
-
-def get_priority_keyboard():
-    buttons = [
-        [InlineKeyboardButton("💰 Цена", callback_data="priority_price")],
-        [InlineKeyboardButton("⚡ Скорость", callback_data="priority_speed")],
-        [InlineKeyboardButton("⭐ Комфорт", callback_data="priority_comfort")],
-        [InlineKeyboardButton("⚖️ Баланс", callback_data="priority_balance")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="settings_back")]
     ]
     return InlineKeyboardMarkup(buttons)
 
@@ -934,7 +955,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
     if text == "✈️ Начать поиск":
-        # --- ПОЛНАЯ ОЧИСТКА ПРИ НОВОМ ПОИСКЕ ---
         user_data.clear()
         await update.message.reply_text(
             "🌍 *Откуда вылетаем?*\n\n"
@@ -957,6 +977,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'price': '💰 Цена',
             'speed': '⚡ Скорость',
             'comfort': '⭐ Комфорт',
+            'convenience': '🛋️ Удобство',
             'balance': '⚖️ Баланс'
         }
         stops_names = {
@@ -1128,6 +1149,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"🔘 Callback: {data} от user {user_id}")
     
+    if data == "settings_priority":
+        await query.edit_message_text(
+            "🎯 *Выберите приоритет поиска:*\n\n"
+            "💰 *Цена* — самые дешёвые билеты (могут быть с долгими пересадками)\n"
+            "⚡ *Скорость* — самые быстрые перелеты (минимальное общее время)\n"
+            "⭐ *Комфорт* — минимальное число пересадок (но может быть дороже)\n"
+            "🛋️ *Удобство* — короткие пересадки + удобное время вылета\n"
+            "⚖️ *Баланс* — оптимальное сочетание цены, времени и комфорта\n\n"
+            "💡 *Рекомендация:* если хотите удобную пересадку, выберите 🛋️ Удобство или ⭐ Комфорт",
+            parse_mode="Markdown",
+            reply_markup=get_priority_keyboard()
+        )
+        return
+    
     # --- ПОИСК ПО ГОРОДУ ---
     if data == "search_by_city":
         user_data['state'] = 'search_by_city'
@@ -1226,10 +1261,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "settings_priority":
         await query.edit_message_text(
             "🎯 *Выберите приоритет поиска:*\n\n"
-            "💰 *Цена* — самые дешевые билеты\n"
-            "⚡ *Скорость* — самые быстрые перелеты\n"
-            "⭐ *Комфорт* — минимальное число пересадок\n"
-            "⚖️ *Баланс* — оптимальное сочетание",
+            "💰 *Цена* — самые дешёвые билеты (могут быть с долгими пересадками)\n"
+            "⚡ *Скорость* — самые быстрые перелеты (минимальное общее время)\n"
+            "⭐ *Комфорт* — минимальное число пересадок (но может быть дороже)\n"
+            "🛋️ *Удобство* — короткие пересадки + удобное время вылета\n"
+            "⚖️ *Баланс* — оптимальное сочетание цены, времени и комфорта\n\n"
+            "💡 *Рекомендация:* если хотите удобную пересадку, выберите 🛋️ Удобство или ⭐ Комфорт",
             parse_mode="Markdown",
             reply_markup=get_priority_keyboard()
         )
@@ -1265,6 +1302,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'price': '💰 Цена',
             'speed': '⚡ Скорость',
             'comfort': '⭐ Комфорт',
+            'convenience': '🛋️ Удобство',
             'balance': '⚖️ Баланс'
         }
         stops_names = {
@@ -1313,6 +1351,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'price': '💰 Цена',
             'speed': '⚡ Скорость',
             'comfort': '⭐ Комфорт',
+            'convenience': '🛋️ Удобство',
             'balance': '⚖️ Баланс'
         }
         await query.edit_message_text(
@@ -1449,7 +1488,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         codes = find_city_code(code)
         if codes:
             if not user_data.get('from_city_codes'):
-                # --- ПЕРВЫЙ ГОРОД (ВЫЛЕТ) ---
                 user_data['from_city_codes'] = codes
                 user_data['from_city_name'] = code
                 user_data['state'] = 'to_city'
@@ -1463,7 +1501,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=get_city_keyboard(user_id)
                 )
             else:
-                # --- ВТОРОЙ ГОРОД (ПРИЛЁТ) ---
                 user_data['to_city_codes'] = codes
                 user_data['to_city_name'] = code
                 user_data['state'] = 'date'
@@ -1504,8 +1541,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not from_codes or not to_codes or not date:
         await update.callback_query.edit_message_text("❌ Не все данные введены. Начните заново.")
         user_data.clear()
-        return
-    
+        return    
     from_codes = [c for c in from_codes if c]
     to_codes = [c for c in to_codes if c]
     
@@ -1518,6 +1554,8 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text("🔍 Ищу билеты... Это займет несколько секунд.")
         
         all_flights = []
+        
+        # 1. Поиск через Google Flights (fast-flights)
         for from_city in from_codes[:3]:
             for to_city in to_codes[:3]:
                 try:
@@ -1530,10 +1568,23 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     result = get_flights(q)
                     if result and len(result) > 0:
-                        all_flights.extend(result)
-                        logger.info(f"✅ Найдены рейсы {from_city}→{to_city}: {len(result)} шт.")
+                        flights_data = parse_flight_data(result)
+                        all_flights.extend(flights_data)
+                        logger.info(f"✅ Google Flights: найдены рейсы {from_city}→{to_city}: {len(flights_data)} шт.")
                 except Exception as e:
-                    logger.error(f"Ошибка поиска {from_city}→{to_city}: {e}")
+                    logger.error(f"Ошибка Google Flights {from_city}→{to_city}: {e}")
+        
+        # 2. Поиск через Aviasales
+        for from_city in from_codes[:3]:
+            for to_city in to_codes[:3]:
+                try:
+                    avia_data = search_aviasales(from_city, to_city, date)
+                    if avia_data:
+                        avia_flights = parse_aviasales_result(avia_data, from_city, to_city, date)
+                        all_flights.extend(avia_flights)
+                        logger.info(f"✅ Aviasales: найдены рейсы {from_city}→{to_city}: {len(avia_flights)} шт.")
+                except Exception as e:
+                    logger.error(f"Ошибка Aviasales {from_city}→{to_city}: {e}")
         
         if not all_flights:
             await update.callback_query.edit_message_text(
@@ -1546,27 +1597,22 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_data.clear()
             return
         
-        flights_data = parse_flight_data(all_flights)
-        if not flights_data:
-            await update.callback_query.edit_message_text("❌ Не удалось получить детали рейсов.")
-            user_data.clear()
-            return
-        
         prefs = get_user_preferences(user_id)
         favorite_airport = prefs.get('favorite_airport', '')
         
-        sorted_flights = get_sorted_flights(flights_data, prefs, favorite_airport)
-        best_overall, cheapest, fastest = get_best_flights(flights_data, prefs)
+        sorted_flights = get_sorted_flights(all_flights, prefs, favorite_airport)
+        best_overall, cheapest, fastest = get_best_flights(all_flights, prefs)
         
         from_name = user_data.get('from_city_name', from_codes[0])
         to_name = user_data.get('to_city_name', to_codes[0])
         query_text = f"{from_name} → {to_name} {date}"
-        save_search_history(user_id, from_name, to_name, date, query_text, flights_data[:5])
+        save_search_history(user_id, from_name, to_name, date, query_text, all_flights[:5])
         
         priority_names = {
             'price': '💰 Цена',
             'speed': '⚡ Скорость',
             'comfort': '⭐ Комфорт',
+            'convenience': '🛋️ Удобство',
             'balance': '⚖️ Баланс'
         }
         current_priority = prefs.get('priority', 'balance')
@@ -1582,12 +1628,12 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if sorted_flights:
             response += f"📋 *Топ {min(5, len(sorted_flights))} вариантов:*\n\n"
             for i, flight in enumerate(sorted_flights[:5], 1):
-                response += format_flight_card(flight, index=i) + "\n\n"
+                response += format_flight_card_compact(flight, index=i) + "\n\n"
         
         if best_overall:
             response += "⭐ *Рекомендованный вариант:*\n"
-            response += format_flight_card(best_overall) + "\n"
-            response += f"📌 *Почему:* {get_reason(best_overall, prefs)}\n\n"
+            response += format_flight_card_compact(best_overall) + "\n"
+            response += f"📌 *Почему:* {get_reason_compact(best_overall, prefs)}\n\n"
         
         response += "💡 Для покупки перейдите на сайт авиакомпании."
         
@@ -1645,6 +1691,8 @@ async def handle_manual_search(update: Update, text, context):
         await update.message.reply_text("🔍 Ищу билеты... Это займет несколько секунд.")
         
         all_flights = []
+        
+        # Google Flights
         for from_c in from_codes[:3]:
             for to_c in to_codes[:3]:
                 try:
@@ -1657,9 +1705,21 @@ async def handle_manual_search(update: Update, text, context):
                     )
                     result = get_flights(q)
                     if result and len(result) > 0:
-                        all_flights.extend(result)
+                        flights_data = parse_flight_data(result)
+                        all_flights.extend(flights_data)
                 except Exception as e:
-                    logger.error(f"Ошибка поиска {from_c}→{to_c}: {e}")
+                    logger.error(f"Ошибка Google Flights {from_c}→{to_c}: {e}")
+        
+        # Aviasales
+        for from_c in from_codes[:3]:
+            for to_c in to_codes[:3]:
+                try:
+                    avia_data = search_aviasales(from_c, to_c, date)
+                    if avia_data:
+                        avia_flights = parse_aviasales_result(avia_data, from_c, to_c, date)
+                        all_flights.extend(avia_flights)
+                except Exception as e:
+                    logger.error(f"Ошибка Aviasales {from_c}→{to_c}: {e}")
         
         if not all_flights:
             await update.message.reply_text("❌ Рейсы не найдены. Попробуйте другую дату или направление.")
@@ -1675,16 +1735,17 @@ async def handle_manual_search(update: Update, text, context):
         prefs = get_user_preferences(user_id)
         favorite_airport = prefs.get('favorite_airport', '')
         
-        sorted_flights = get_sorted_flights(flights_data, prefs, favorite_airport)
-        best_overall, cheapest, fastest = get_best_flights(flights_data, prefs)
+        sorted_flights = get_sorted_flights(all_flights, prefs, favorite_airport)
+        best_overall, cheapest, fastest = get_best_flights(all_flights, prefs)
         
         query_text = f"{from_city} → {to_city} {date}"
-        save_search_history(user_id, from_city, to_city, date, query_text, flights_data[:5])
+        save_search_history(user_id, from_city, to_city, date, query_text, all_flights[:5])
         
         priority_names = {
             'price': '💰 Цена',
             'speed': '⚡ Скорость',
             'comfort': '⭐ Комфорт',
+            'convenience': '🛋️ Удобство',
             'balance': '⚖️ Баланс'
         }
         current_priority = prefs.get('priority', 'balance')
@@ -1700,12 +1761,12 @@ async def handle_manual_search(update: Update, text, context):
         if sorted_flights:
             response += f"📋 *Топ {min(5, len(sorted_flights))} вариантов:*\n\n"
             for i, flight in enumerate(sorted_flights[:5], 1):
-                response += format_flight_card(flight, index=i) + "\n\n"
+                response += format_flight_card_compact(flight, index=i) + "\n\n"
         
         if best_overall:
             response += "⭐ *Рекомендованный вариант:*\n"
-            response += format_flight_card(best_overall) + "\n"
-            response += f"📌 *Почему:* {get_reason(best_overall, prefs)}\n\n"
+            response += format_flight_card_compact(best_overall) + "\n"
+            response += f"📌 *Почему:* {get_reason_compact(best_overall, prefs)}\n\n"
         
         response += "💡 Для покупки перейдите на сайт авиакомпании."
         
