@@ -170,12 +170,12 @@ def search_aviasales(origin, destination, date):
         url = "https://api.travelpayouts.com/graphql"
         
         query = """
-        query PricesOneWay($origin: String!, $destination: String!, $departMonths: String!) {
+        query PricesOneWay($origin: String!, $destination: String!, $departDate: String!) {
             prices_one_way(
                 params: {
                     origin: $origin
                     destination: $destination
-                    depart_months: $departMonths
+                    depart_date: $departDate
                 }
                 sorting: VALUE_ASC
                 limit: 100
@@ -194,7 +194,7 @@ def search_aviasales(origin, destination, date):
         variables = {
             "origin": origin,
             "destination": destination,
-            "departMonths": date[:7]  # YYYY-MM
+            "departDate": date  # полная дата YYYY-MM-DD
         }
         
         headers = {
