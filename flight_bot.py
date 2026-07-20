@@ -188,16 +188,70 @@ def search_google_flights(origin, destination, date):
         # Получаем данные
         result = get_flights_from_filter(flight_filter, data_source='js', mode="common")
         
-        if result and len(result) > 0:
-            logger.info(f"✅ Google Flights (google-flights): найдено {len(result)} рейсов для {origin}→{destination}")
-            return result
-        else:
-            logger.warning(f"⚠️ Google Flights (google-flights): рейсы не найдены для {origin}→{destination}")
+        # Проверяем, что результат не None
+        if result is None:
+            logger.warning(f"⚠️ Google Flights: результат None для {origin}→{destination}")
+            return None
+        
+        # Пробуем получить атрибуты объекта DecodedResult
+        try:
+            # Если есть атрибут flights
+            if hasattr(result, 'flights'):
+                flights_list = result.flights
+                if flights_list and len(flights_list) > 0:
+                    logger.info(f"✅ Google Flights: найдено {len(flights_list)} рейсов для {origin}→{destination}")
+                    return flights_list
+                else:
+                    logger.warning(f"⚠️ Google Flights: рейсы не найдены для {origin}→{destination}")
+                    return []
+            
+            # Если есть атрибут data
+            elif hasattr(result, 'data'):
+                data = result.data
+                if data and hasattr(data, 'flights'):
+                    flights_list = data.flights
+                    if flights_list and len(flights_list) > 0:
+                        logger.info(f"✅ Google Flights: найдено {len(flights_list)} рейсов для {origin}→{destination}")
+                        return flights_list
+            
+            # Если есть метод to_dict
+            elif hasattr(result, 'to_dict'):
+                data_dict = result.to_dict()
+                if data_dict and 'flights' in data_dict:
+                    flights_list = data_dict['flights']
+                    if flights_list and len(flights_list) > 0:
+                        logger.info(f"✅ Google Flights: найдено {len(flights_list)} рейсов для {origin}→{destination}")
+                        return flights_list
+            
+            # Если объект итерируемый
+            try:
+                if hasattr(result, '__iter__') and not isinstance(result, str):
+                    flights_list = list(result)
+                    if flights_list and len(flights_list) > 0:
+                        logger.info(f"✅ Google Flights: найдено {len(flights_list)} рейсов для {origin}→{destination}")
+                        return flights_list
+            except:
+                pass
+            
+            # Если ничего не нашли, пробуем преобразовать в список
+            try:
+                flights_list = list(result)
+                if flights_list and len(flights_list) > 0:
+                    logger.info(f"✅ Google Flights: найдено {len(flights_list)} рейсов для {origin}→{destination}")
+                    return flights_list
+            except:
+                pass
+            
+            logger.warning(f"⚠️ Google Flights: не удалось извлечь рейсы для {origin}→{destination}")
+            return []
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка извлечения рейсов: {e}")
             return []
             
     except Exception as e:
         logger.error(f"❌ Ошибка google-flights для {origin}→{destination}: {e}")
-        return []
+        return None
 
 def parse_google_flight_result(flights, origin, destination):
     """Парсит результат google-flights в единый формат"""
@@ -207,51 +261,97 @@ def parse_google_flight_result(flights, origin, destination):
     flights_data = []
     try:
         for flight in flights:
-            # Пробуем получить данные разными способами
-            price_usd = getattr(flight, 'price', getattr(flight, 'price_low', 'N/A'))
-            airline = getattr(flight, 'airline', getattr(flight, 'airline_name', 'N/A'))
-            flight_number = getattr(flight, 'flight_number', getattr(flight, 'flight_num', ''))
-            departure_time = getattr(flight, 'departure_time', getattr(flight, 'departure', 'N/A'))
-            arrival_time = getattr(flight, 'arrival_time', getattr(flight, 'arrival', 'N/A'))
-            duration = getattr(flight, 'duration', 0)
-            stops = getattr(flight, 'stops', 0)
-            
-            dep_hour = 12
-            dep_str = "N/A"
-            arr_str = "N/A"
             try:
-                if departure_time != "N/A" and departure_time:
-                    dt = datetime.fromisoformat(departure_time.replace("Z", "+00:00"))
-                    dep_str = dt.strftime("%Y-%m-%d %H:%M")
-                    dep_hour = dt.hour
-                if arrival_time != "N/A" and arrival_time:
-                    dt = datetime.fromisoformat(arrival_time.replace("Z", "+00:00"))
-                    arr_str = dt.strftime("%Y-%m-%d %H:%M")
-            except:
-                pass
-            
-            # Создаём сегменты
-            segments = [
-                {
-                    'from_code': origin,
-                    'to_code': destination,
-                    'departure': dep_str,
-                    'arrival': arr_str,
-                    'duration': duration,
-                    'departure_hour': dep_hour
-                }
-            ]
-            
-            flights_data.append({
-                'airline': airline,
-                'price_usd': price_usd,
-                'segments': segments,
-                'total_segments': 1,
-                'total_duration': duration,
-                'stops': stops,
-                'flight_number': flight_number,
-                'source': 'google-flights'
-            })
+                # Пробуем получить данные разными способами
+                price_usd = getattr(flight, 'price', getattr(flight, 'price_low', 'N/A'))
+                if price_usd == 'N/A':
+                    price_usd = getattr(flight, 'price_high', 'N/A')
+                
+                airline = getattr(flight, 'airline', getattr(flight, 'airline_name', 'N/A'))
+                if airline == 'N/A':
+                    airline = getattr(flight, 'carrier', 'N/A')
+                
+                flight_number = getattr(flight, 'flight_number', getattr(flight, 'flight_num', ''))
+                departure_time = getattr(flight, 'departure_time', getattr(flight, 'departure', 'N/A'))
+                arrival_time = getattr(flight, 'arrival_time', getattr(flight, 'arrival', 'N/A'))
+                duration = getattr(flight, 'duration', 0)
+                stops = getattr(flight, 'stops', 0)
+                
+                dep_hour = 12
+                dep_str = "N/A"
+                arr_str = "N/A"
+                try:
+                    if departure_time != "N/A" and departure_time:
+                        dt = datetime.fromisoformat(departure_time.replace("Z", "+00:00"))
+                        dep_str = dt.strftime("%Y-%m-%d %H:%M")
+                        dep_hour = dt.hour
+                    if arrival_time != "N/A" and arrival_time:
+                        dt = datetime.fromisoformat(arrival_time.replace("Z", "+00:00"))
+                        arr_str = dt.strftime("%Y-%m-%d %H:%M")
+                except:
+                    pass
+                
+                # Создаём сегменты
+                segments = [
+                    {
+                        'from_code': origin,
+                        'to_code': destination,
+                        'departure': dep_str,
+                        'arrival': arr_str,
+                        'duration': duration,
+                        'departure_hour': dep_hour
+                    }
+                ]
+                
+                # Проверяем, есть ли пересадки в данных
+                if stops > 0:
+                    # Если есть информация о пересадках, добавляем сегменты
+                    if hasattr(flight, 'segments'):
+                        segs = getattr(flight, 'segments', [])
+                        if segs:
+                            segments = []
+                            for seg in segs:
+                                seg_dep = getattr(seg, 'departure_time', getattr(seg, 'departure', 'N/A'))
+                                seg_arr = getattr(seg, 'arrival_time', getattr(seg, 'arrival', 'N/A'))
+                                seg_origin = getattr(seg, 'origin', getattr(seg, 'from_airport', origin))
+                                seg_dest = getattr(seg, 'destination', getattr(seg, 'to_airport', destination))
+                                seg_dur = getattr(seg, 'duration', 0)
+                                seg_stops = getattr(seg, 'stops', 0)
+                                
+                                seg_dep_str = "N/A"
+                                seg_arr_str = "N/A"
+                                try:
+                                    if seg_dep != "N/A" and seg_dep:
+                                        dt = datetime.fromisoformat(seg_dep.replace("Z", "+00:00"))
+                                        seg_dep_str = dt.strftime("%Y-%m-%d %H:%M")
+                                    if seg_arr != "N/A" and seg_arr:
+                                        dt = datetime.fromisoformat(seg_arr.replace("Z", "+00:00"))
+                                        seg_arr_str = dt.strftime("%Y-%m-%d %H:%M")
+                                except:
+                                    pass
+                                
+                                segments.append({
+                                    'from_code': seg_origin[:3] if len(seg_origin) > 2 else origin,
+                                    'to_code': seg_dest[:3] if len(seg_dest) > 2 else destination,
+                                    'departure': seg_dep_str,
+                                    'arrival': seg_arr_str,
+                                    'duration': seg_dur,
+                                    'departure_hour': dep_hour
+                                })
+                
+                flights_data.append({
+                    'airline': airline,
+                    'price_usd': price_usd,
+                    'segments': segments,
+                    'total_segments': len(segments),
+                    'total_duration': duration,
+                    'stops': stops,
+                    'flight_number': flight_number,
+                    'source': 'google-flights'
+                })
+            except Exception as e:
+                logger.error(f"❌ Ошибка парсинга отдельного рейса: {e}")
+                continue
     except Exception as e:
         logger.error(f"❌ Ошибка парсинга google-flights: {e}")
     
@@ -633,9 +733,7 @@ def format_duration(minutes):
 
 def parse_flight_data(flights_data_from_source):
     """Универсальный парсер для данных из разных источников"""
-    # Если данные уже в нужном формате, возвращаем как есть
     if flights_data_from_source and isinstance(flights_data_from_source, list):
-        # Проверяем, не являются ли данные уже готовыми
         if all(isinstance(f, dict) and 'airline' in f for f in flights_data_from_source):
             return flights_data_from_source
     return flights_data_from_source
@@ -1734,7 +1832,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         google_flights_count = 0
         aviasales_count = 0
         
-        # 1. Google Flights через google-flights (новый пакет)
+        # 1. Google Flights через google-flights
         for from_city in from_codes:
             for to_city in to_codes:
                 try:
