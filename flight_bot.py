@@ -13,7 +13,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
 # --- ЗАМЕНА: google-flights вместо fast-flights ---
-from google_flights import create_filter, FlightData, Passengers, get_flights_from_filter
+from google_flights import create_filter, FlightData, Passengers, get_flights
 
 # --- НАСТРОЙКА ---
 logging.basicConfig(level=logging.INFO)
@@ -171,7 +171,7 @@ def search_google_flights(origin, destination, date):
     try:
         logger.info(f"📡 Google Flights запрос (google-flights): {origin}→{destination} {date}")
         
-        # Создаём фильтр с геолокацией
+        # Создаём фильтр (без gl)
         flight_filter = create_filter(
             flight_data=[
                 FlightData(
@@ -183,20 +183,18 @@ def search_google_flights(origin, destination, date):
             trip="one-way",
             passengers=Passengers(adults=1),
             seat="economy",
-            gl="ru",  # <--- ДОБАВЛЕНО
         )
         
-        # Получаем данные
-        result = get_flights_from_filter(flight_filter, data_source='js', mode="common")
+        # Получаем данные через get_flights
+        result = get_flights(flight_filter, data_source='js')
         
-        # Проверяем, что результат не None
+        # Проверяем результат
         if result is None:
             logger.warning(f"⚠️ Google Flights: результат None для {origin}→{destination}")
             return None
         
-        # Пробуем получить атрибуты объекта DecodedResult
+        # Пробуем извлечь рейсы
         try:
-            # Если есть атрибут flights
             if hasattr(result, 'flights'):
                 flights_list = result.flights
                 if flights_list and len(flights_list) > 0:
@@ -205,24 +203,6 @@ def search_google_flights(origin, destination, date):
                 else:
                     logger.warning(f"⚠️ Google Flights: рейсы не найдены для {origin}→{destination}")
                     return []
-            
-            # Если есть атрибут data
-            elif hasattr(result, 'data'):
-                data = result.data
-                if data and hasattr(data, 'flights'):
-                    flights_list = data.flights
-                    if flights_list and len(flights_list) > 0:
-                        logger.info(f"✅ Google Flights: найдено {len(flights_list)} рейсов для {origin}→{destination}")
-                        return flights_list
-            
-            # Если есть метод to_dict
-            elif hasattr(result, 'to_dict'):
-                data_dict = result.to_dict()
-                if data_dict and 'flights' in data_dict:
-                    flights_list = data_dict['flights']
-                    if flights_list and len(flights_list) > 0:
-                        logger.info(f"✅ Google Flights: найдено {len(flights_list)} рейсов для {origin}→{destination}")
-                        return flights_list
             
             # Если объект итерируемый
             try:
@@ -234,15 +214,7 @@ def search_google_flights(origin, destination, date):
             except:
                 pass
             
-            # Если ничего не нашли, пробуем преобразовать в список
-            try:
-                flights_list = list(result)
-                if flights_list and len(flights_list) > 0:
-                    logger.info(f"✅ Google Flights: найдено {len(flights_list)} рейсов для {origin}→{destination}")
-                    return flights_list
-            except:
-                pass
-            
+            # Если ничего не нашли
             logger.warning(f"⚠️ Google Flights: не удалось извлечь рейсы для {origin}→{destination}")
             return []
             
