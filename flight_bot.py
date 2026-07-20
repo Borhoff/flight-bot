@@ -171,7 +171,7 @@ def search_google_flights(origin, destination, date):
     try:
         logger.info(f"📡 Google Flights запрос (google-flights): {origin}→{destination} {date}")
         
-        # Создаём фильтр
+        # Создаём фильтр с геолокацией
         flight_filter = create_filter(
             flight_data=[
                 FlightData(
@@ -183,6 +183,7 @@ def search_google_flights(origin, destination, date):
             trip="one-way",
             passengers=Passengers(adults=1),
             seat="economy",
+            gl="ru",  # <--- ДОБАВЛЕНО
         )
         
         # Получаем данные
