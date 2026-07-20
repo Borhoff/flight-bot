@@ -12,8 +12,8 @@ from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# --- ЗАМЕНА: google-flights вместо fast-flights ---
-from google_flights import create_filter, FlightData, Passengers, get_flights
+# --- ИСПРАВЛЕННЫЙ ИМПОРТ (рабочая версия) ---
+from google_flights import create_filter, FlightData, Passengers, get_flights_from_filter
 
 # --- НАСТРОЙКА ---
 logging.basicConfig(level=logging.INFO)
@@ -21,8 +21,6 @@ logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 USD_TO_RUB = 95.0
-
-# --- TRAVELPAYOUTS / AVIASALES ---
 TRAVELPAYOUTS_TOKEN = "eb631f12ac7f83fda4125614a6dd04bc"
 
 # --- FLASK ---
@@ -165,13 +163,12 @@ def delete_search_history(user_id, history_id=None):
         logger.error(f"❌ Ошибка очистки истории: {e}")
         return False
 
-# --- ФУНКЦИЯ ПОИСКА ЧЕРЕЗ google-flights ---
+# --- ФУНКЦИЯ ПОИСКА ---
 def search_google_flights(origin, destination, date):
     """Поиск билетов через google-flights"""
     try:
-        logger.info(f"📡 Google Flights запрос (google-flights): {origin}→{destination} {date}")
+        logger.info(f"📡 Google Flights запрос: {origin}→{destination} {date}")
         
-        # Создаём фильтр (без gl)
         flight_filter = create_filter(
             flight_data=[
                 FlightData(
@@ -185,37 +182,27 @@ def search_google_flights(origin, destination, date):
             seat="economy",
         )
         
-        # Получаем данные через get_flights
-        result = get_flights(flight_filter, data_source='js')
+        result = get_flights_from_filter(flight_filter, data_source='js', mode="common")
         
-        # Проверяем результат
         if result is None:
             logger.warning(f"⚠️ Google Flights: результат None для {origin}→{destination}")
             return None
         
-        # Пробуем извлечь рейсы
         try:
             if hasattr(result, 'flights'):
                 flights_list = result.flights
                 if flights_list and len(flights_list) > 0:
-                    logger.info(f"✅ Google Flights: найдено {len(flights_list)} рейсов для {origin}→{destination}")
+                    logger.info(f"✅ Google Flights: найдено {len(flights_list)} рейсов")
                     return flights_list
                 else:
-                    logger.warning(f"⚠️ Google Flights: рейсы не найдены для {origin}→{destination}")
                     return []
             
-            # Если объект итерируемый
-            try:
-                if hasattr(result, '__iter__') and not isinstance(result, str):
-                    flights_list = list(result)
-                    if flights_list and len(flights_list) > 0:
-                        logger.info(f"✅ Google Flights: найдено {len(flights_list)} рейсов для {origin}→{destination}")
-                        return flights_list
-            except:
-                pass
+            if hasattr(result, '__iter__') and not isinstance(result, str):
+                flights_list = list(result)
+                if flights_list and len(flights_list) > 0:
+                    logger.info(f"✅ Google Flights: найдено {len(flights_list)} рейсов")
+                    return flights_list
             
-            # Если ничего не нашли
-            logger.warning(f"⚠️ Google Flights: не удалось извлечь рейсы для {origin}→{destination}")
             return []
             
         except Exception as e:
@@ -223,11 +210,10 @@ def search_google_flights(origin, destination, date):
             return []
             
     except Exception as e:
-        logger.error(f"❌ Ошибка google-flights для {origin}→{destination}: {e}")
+        logger.error(f"❌ Ошибка google-flights: {e}")
         return None
 
 def parse_google_flight_result(flights, origin, destination):
-    """Парсит результат google-flights в единый формат"""
     if not flights:
         return []
     
@@ -235,11 +221,7 @@ def parse_google_flight_result(flights, origin, destination):
     try:
         for flight in flights:
             try:
-                # Пробуем получить данные разными способами
                 price_usd = getattr(flight, 'price', getattr(flight, 'price_low', 'N/A'))
-                if price_usd == 'N/A':
-                    price_usd = getattr(flight, 'price_high', 'N/A')
-                
                 airline = getattr(flight, 'airline', getattr(flight, 'airline_name', 'N/A'))
                 if airline == 'N/A':
                     airline = getattr(flight, 'carrier', 'N/A')
@@ -264,7 +246,6 @@ def parse_google_flight_result(flights, origin, destination):
                 except:
                     pass
                 
-                # Создаём сегменты
                 segments = [
                     {
                         'from_code': origin,
@@ -276,63 +257,26 @@ def parse_google_flight_result(flights, origin, destination):
                     }
                 ]
                 
-                # Проверяем, есть ли пересадки в данных
-                if stops > 0:
-                    # Если есть информация о пересадках, добавляем сегменты
-                    if hasattr(flight, 'segments'):
-                        segs = getattr(flight, 'segments', [])
-                        if segs:
-                            segments = []
-                            for seg in segs:
-                                seg_dep = getattr(seg, 'departure_time', getattr(seg, 'departure', 'N/A'))
-                                seg_arr = getattr(seg, 'arrival_time', getattr(seg, 'arrival', 'N/A'))
-                                seg_origin = getattr(seg, 'origin', getattr(seg, 'from_airport', origin))
-                                seg_dest = getattr(seg, 'destination', getattr(seg, 'to_airport', destination))
-                                seg_dur = getattr(seg, 'duration', 0)
-                                seg_stops = getattr(seg, 'stops', 0)
-                                
-                                seg_dep_str = "N/A"
-                                seg_arr_str = "N/A"
-                                try:
-                                    if seg_dep != "N/A" and seg_dep:
-                                        dt = datetime.fromisoformat(seg_dep.replace("Z", "+00:00"))
-                                        seg_dep_str = dt.strftime("%Y-%m-%d %H:%M")
-                                    if seg_arr != "N/A" and seg_arr:
-                                        dt = datetime.fromisoformat(seg_arr.replace("Z", "+00:00"))
-                                        seg_arr_str = dt.strftime("%Y-%m-%d %H:%M")
-                                except:
-                                    pass
-                                
-                                segments.append({
-                                    'from_code': seg_origin[:3] if len(seg_origin) > 2 else origin,
-                                    'to_code': seg_dest[:3] if len(seg_dest) > 2 else destination,
-                                    'departure': seg_dep_str,
-                                    'arrival': seg_arr_str,
-                                    'duration': seg_dur,
-                                    'departure_hour': dep_hour
-                                })
-                
                 flights_data.append({
                     'airline': airline,
                     'price_usd': price_usd,
                     'segments': segments,
-                    'total_segments': len(segments),
+                    'total_segments': 1,
                     'total_duration': duration,
                     'stops': stops,
                     'flight_number': flight_number,
                     'source': 'google-flights'
                 })
             except Exception as e:
-                logger.error(f"❌ Ошибка парсинга отдельного рейса: {e}")
+                logger.error(f"❌ Ошибка парсинга рейса: {e}")
                 continue
     except Exception as e:
         logger.error(f"❌ Ошибка парсинга google-flights: {e}")
     
     return flights_data
 
-# --- AVIASALES / TRAVELPAYOUTS REST API ---
+# --- AVIASALES ---
 def search_aviasales(origin, destination, date):
-    """Поиск билетов через Travelpayouts REST API"""
     try:
         url = "https://api.travelpayouts.com/v1/prices/cheap"
         params = {
@@ -364,17 +308,13 @@ def search_aviasales(origin, destination, date):
         return None
 
 def parse_aviasales_result(data, origin, destination, date):
-    """Парсит ответ Aviasales REST в единый формат"""
     if not data:
-        logger.warning(f"⚠️ Aviasales: нет данных для парсинга")
         return []
     
     flights = []
     try:
         if destination in data and origin in data[destination]:
             prices = data[destination][origin]
-            logger.info(f"📊 Aviasales: найдено {len(prices)} цен")
-            
             for price_data in prices:
                 airline = price_data.get('airline', 'N/A')
                 price = price_data.get('price', 0)
@@ -387,12 +327,10 @@ def parse_aviasales_result(data, origin, destination, date):
                 
                 dep_time = "N/A"
                 arr_time = "N/A"
-                dep_hour = 12
                 try:
                     if departure_at != "N/A":
                         dt = datetime.fromisoformat(departure_at.replace("Z", "+00:00"))
                         dep_time = dt.strftime("%Y-%m-%d %H:%M")
-                        dep_hour = dt.hour
                     if return_at != "N/A":
                         dt = datetime.fromisoformat(return_at.replace("Z", "+00:00"))
                         arr_time = dt.strftime("%Y-%m-%d %H:%M")
@@ -409,7 +347,7 @@ def parse_aviasales_result(data, origin, destination, date):
                             'departure': dep_time,
                             'arrival': arr_time,
                             'duration': 0,
-                            'departure_hour': dep_hour
+                            'departure_hour': 12
                         }
                     ],
                     'total_segments': 1,
@@ -420,8 +358,6 @@ def parse_aviasales_result(data, origin, destination, date):
                     'source': 'aviasales'
                 })
                 logger.info(f"✈️ Aviasales: найден рейс {airline} {flight_number} за {price} RUB")
-        else:
-            logger.warning(f"⚠️ Aviasales: нет данных для маршрута {origin}→{destination}")
     except Exception as e:
         logger.error(f"❌ Aviasales парсинг ошибка: {e}")
     
@@ -493,15 +429,8 @@ def get_fallback_data():
         "DME": "Домодедово",
         "VKO": "Внуково",
         "DXB": "Дубай",
-        "DWC": "Дубай-Аль-Мактум",
         "LHR": "Хитроу",
-        "LGW": "Гатвик",
-        "STN": "Станстед",
         "JFK": "Кеннеди",
-        "EWR": "Ньюарк",
-        "LGA": "Ла-Гуардия",
-        "CDG": "Шарль-де-Голль",
-        "ORY": "Орли",
         "IST": "Стамбул",
         "PEK": "Пекин",
         "PVG": "Шанхай Пудун",
@@ -576,7 +505,6 @@ def find_city_code(city_name):
     normalized = normalize_city_name(city_name)
     city_lower = normalized.lower().strip()
     
-    # --- ПОПУЛЯРНЫЕ ГОРОДА (приоритет) ---
     popular_cities = {
         "москва": ["SVO", "DME", "VKO"],
         "moscow": ["SVO", "DME", "VKO"],
@@ -619,15 +547,12 @@ def find_city_code(city_name):
     if city_lower in popular_cities:
         return popular_cities[city_lower]
     
-    # --- IATA-код (3 буквы) ---
     if len(city_lower) == 3 and city_name.isupper():
         return [city_lower.upper()]
     
-    # --- ПОИСК В БАЗЕ ---
     if city_lower in CITY_TO_IATA:
         return CITY_TO_IATA[city_lower]
     
-    # --- ЧАСТИЧНОЕ СОВПАДЕНИЕ ---
     results = []
     for city, codes in CITY_TO_IATA.items():
         if city_lower in city or city in city_lower:
@@ -704,13 +629,6 @@ def format_duration(minutes):
     except:
         return str(minutes)
 
-def parse_flight_data(flights_data_from_source):
-    """Универсальный парсер для данных из разных источников"""
-    if flights_data_from_source and isinstance(flights_data_from_source, list):
-        if all(isinstance(f, dict) and 'airline' in f for f in flights_data_from_source):
-            return flights_data_from_source
-    return flights_data_from_source
-
 def format_flight_card_compact(flight, index=None, label=None):
     price_usd = flight.get('price_usd', 'N/A')
     price_rub = int(price_usd * USD_TO_RUB) if price_usd != 'N/A' else 'N/A'
@@ -741,22 +659,7 @@ def format_flight_card_compact(flight, index=None, label=None):
     if stops == 0:
         card += f"   🟢 *Прямой рейс*"
     else:
-        layover_info = []
-        for i in range(stops):
-            if i + 1 < len(segments):
-                seg = segments[i]
-                next_seg = segments[i+1]
-                try:
-                    arr_time = datetime.strptime(seg.get('arrival', 'N/A'), "%Y-%m-%d %H:%M")
-                    dep_time = datetime.strptime(next_seg.get('departure', 'N/A'), "%Y-%m-%d %H:%M")
-                    layover = (dep_time - arr_time).total_seconds() / 60
-                    layover_info.append(f"{seg.get('to_code', 'N/A')} ({format_duration(layover)})")
-                except:
-                    layover_info.append(seg.get('to_code', 'N/A'))
-        if layover_info:
-            card += f"   🔄 *{stops} пересадки:* {', '.join(layover_info)}"
-        else:
-            card += f"   🔄 *{stops} пересадки*"
+        card += f"   🔄 *{stops} пересадки*"
     
     return card
 
@@ -785,7 +688,6 @@ def rate_flight(flight, user_preferences):
     stops = flight.get('stops', 0)
     total_duration = flight.get('total_duration', 0)
     
-    # Цена (30 баллов)
     if price < 200:
         score += 30
     elif price < 400:
@@ -797,7 +699,6 @@ def rate_flight(flight, user_preferences):
     else:
         score += 10
     
-    # Пересадки (30 баллов)
     max_stops = user_preferences.get('max_stops', 3)
     if stops <= max_stops:
         if stops == 0:
@@ -811,7 +712,6 @@ def rate_flight(flight, user_preferences):
     else:
         score -= 10
     
-    # Время вылета (20 баллов)
     segments = flight.get('segments', [])
     if segments:
         dep_hour = segments[0].get('departure_hour', 12)
@@ -836,7 +736,6 @@ def rate_flight(flight, user_preferences):
             else:
                 score += 5
     
-    # Время в пути (20 баллов)
     if total_duration < 180:
         score += 20
     elif total_duration < 360:
@@ -846,7 +745,6 @@ def rate_flight(flight, user_preferences):
     else:
         score += 5
     
-    # Приоритет пользователя
     priority = user_preferences.get('priority', 'balance')
     
     if priority == 'price':
@@ -863,20 +761,6 @@ def rate_flight(flight, user_preferences):
             dep_hour = segments[0].get('departure_hour', 12)
             if not (6 <= dep_hour <= 22):
                 convenience_score -= 20
-        if len(segments) > 1:
-            for i in range(len(segments) - 1):
-                try:
-                    arr_time = datetime.strptime(segments[i].get('arrival', 'N/A'), "%Y-%m-%d %H:%M")
-                    dep_time = datetime.strptime(segments[i+1].get('departure', 'N/A'), "%Y-%m-%d %H:%M")
-                    layover = (dep_time - arr_time).total_seconds() / 60
-                    if layover > 480:
-                        convenience_score -= 20
-                    elif layover > 240:
-                        convenience_score -= 10
-                    elif layover > 120:
-                        convenience_score -= 5
-                except:
-                    pass
         score = score * 0.3 + convenience_score * 0.7
     else:
         score = score * 0.5 + max(0, (100 - price / 8)) * 0.3 + max(0, (100 - total_duration / 8)) * 0.2
