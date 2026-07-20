@@ -1,3 +1,90 @@
+import os
+import logging
+import re
+import json
+import threading
+import time
+import sqlite3
+import requests
+import csv
+from datetime import datetime, timedelta
+from flask import Flask
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from fast_flights import FlightQuery, Passengers, create_query, get_flights
+
+# --- НАСТРОЙКА ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+USD_TO_RUB = 95.0
+
+# --- TRAVELPAYOUTS / AVIASALES ---
+TRAVELPAYOUTS_TOKEN = "eb631f12ac7f83fda4125614a6dd04bc"
+
+# --- FLASK ---
+app_web = Flask(__name__)
+
+@app_web.route('/')
+def index():
+    return "✅ Бот работает!", 200
+
+@app_web.route('/health')
+def health():
+    return "OK", 200
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
+# --- АВТОПИНГ ---
+def keep_alive():
+    url = "http://localhost:10000/"
+    while True:
+        try:
+            requests.get(url, timeout=5)
+            print("💓 Пинг отправлен, бот активен")
+        except:
+            pass
+        time.sleep(600)
+
+# --- БАЗА ДАННЫХ ---
+def init_db():
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            priority TEXT DEFAULT 'balance',
+            max_stops INTEGER DEFAULT 3,
+            preferred_hours TEXT DEFAULT 'all',
+            favorite_city TEXT DEFAULT '',
+            favorite_airport TEXT DEFAULT '',
+            avoid_airports TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS search_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            from_city TEXT,
+            to_city TEXT,
+            date TEXT,
+            query_text TEXT,
+            result TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+    logger.info("✅ База данных инициализирована")
+
+def get_user_preferences(user_id):
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT priority, max_stops, preferred_hours, favorite_city, favorite_airport, avoid_airports FROM users WHERE user_id = ?', (user_id,))
     row = cursor.fetchone()
     conn.close()
     if row:
@@ -76,122 +163,97 @@ def delete_search_history(user_id, history_id=None):
         logger.error(f"❌ Ошибка очистки истории: {e}")
         return False
 
-# --- AVIASALES / TRAVELPAYOUTS GRAPHQL API ---
+# --- AVIASALES / TRAVELPAYOUTS REST API ---
 def search_aviasales(origin, destination, date):
-    """Поиск билетов через Travelpayouts GraphQL API"""
+    """Поиск билетов через Travelpayouts REST API"""
     try:
-        url = "https://api.travelpayouts.com/graphql"
-        
-        query = """
-        query PricesOneWay($origin: String!, $destination: String!, $departDate: String!) {
-            prices_one_way(
-                params: {
-                    origin: $origin
-                    destination: $destination
-                    depart_date: $departDate
-                }
-                sorting: VALUE_ASC
-                limit: 100
-            ) {
-                departure_at
-                return_at
-                value
-                airline
-                flight_number
-                ticket_link
-                transfers
-            }
-        }
-        """
-        
-        variables = {
+        url = "https://api.travelpayouts.com/v1/prices/cheap"
+        params = {
             "origin": origin,
             "destination": destination,
-            "departDate": date
+            "depart_date": date,
+            "token": TRAVELPAYOUTS_TOKEN,
+            "currency": "rub",
+            "show_to_affiliates": "true"
         }
         
-        headers = {
-            "Content-Type": "application/json",
-            "X-Access-Token": TRAVELPAYOUTS_TOKEN
-        }
-        
-        payload = {
-            "query": query,
-            "variables": variables
-        }
-        
-        logger.info(f"📡 Aviasales запрос: {origin}→{destination} {date}")
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        logger.info(f"📡 Aviasales статус: {response.status_code}")
+        logger.info(f"📡 Aviasales REST запрос: {origin}→{destination} {date}")
+        response = requests.get(url, params=params, timeout=30)
+        logger.info(f"📡 Aviasales REST статус: {response.status_code}")
         
         if response.status_code == 200:
             data = response.json()
-            if "errors" in data:
-                logger.error(f"❌ Aviasales ошибка: {data['errors']}")
+            if data.get("success"):
+                logger.info(f"✅ Aviasales REST ответ получен")
+                return data.get("data", {})
+            else:
+                logger.error(f"❌ Aviasales REST ошибка: {data}")
                 return None
-            logger.info(f"✅ Aviasales ответ получен")
-            return data.get("data", {})
         else:
-            logger.error(f"❌ Aviasales HTTP ошибка: {response.text[:200]}")
+            logger.error(f"❌ Aviasales REST HTTP ошибка: {response.text[:200]}")
             return None
     except Exception as e:
-        logger.error(f"❌ Aviasales ошибка: {e}")
+        logger.error(f"❌ Aviasales REST ошибка: {e}")
         return None
 
 def parse_aviasales_result(data, origin, destination, date):
-    """Парсит ответ Aviasales GraphQL в единый формат"""
+    """Парсит ответ Aviasales REST в единый формат"""
     if not data:
         logger.warning(f"⚠️ Aviasales: нет данных для парсинга")
         return []
     
     flights = []
     try:
-        prices = data.get("prices_one_way", [])
-        logger.info(f"📊 Aviasales: найдено {len(prices)} цен")
-        
-        for item in prices:
-            airline = item.get("airline", "N/A")
-            price = item.get("value", 0) / 100
-            departure_at = item.get("departure_at", "N/A")
-            return_at = item.get("return_at", "N/A")
-            flight_number = item.get("flight_number", "")
-            transfers = item.get("transfers", 0)
-            ticket_link = item.get("ticket_link", "")
+        if destination in data and origin in data[destination]:
+            prices = data[destination][origin]
+            logger.info(f"📊 Aviasales: найдено {len(prices)} цен")
             
-            dep_time = "N/A"
-            arr_time = "N/A"
-            dep_hour = 12
-            try:
-                if departure_at != "N/A":
-                    dt = datetime.fromisoformat(departure_at.replace("Z", "+00:00"))
-                    dep_time = dt.strftime("%Y-%m-%d %H:%M")
-                    dep_hour = dt.hour
-                if return_at != "N/A":
-                    dt = datetime.fromisoformat(return_at.replace("Z", "+00:00"))
-                    arr_time = dt.strftime("%Y-%m-%d %H:%M")
-            except:
-                pass
-            
-            flights.append({
-                'airline': airline,
-                'price_usd': price,
-                'segments': [
-                    {
-                        'from_code': origin,
-                        'to_code': destination,
-                        'departure': dep_time,
-                        'arrival': arr_time,
-                        'duration': 0,
-                        'departure_hour': dep_hour
-                    }
-                ],
-                'total_segments': 1,
-                'total_duration': 0,
-                'stops': transfers,
-                'flight_number': flight_number,
-                'ticket_link': ticket_link
-            })
-            logger.info(f"✈️ Aviasales: найден рейс {airline} {flight_number} за {price} USD")
+            for price_data in prices:
+                airline = price_data.get('airline', 'N/A')
+                price = price_data.get('price', 0)
+                departure_at = price_data.get('departure_at', 'N/A')
+                return_at = price_data.get('return_at', 'N/A')
+                flight_number = price_data.get('flight_number', '')
+                transfers = price_data.get('transfers', 0)
+                
+                price_usd = round(price / USD_TO_RUB, 2)
+                
+                dep_time = "N/A"
+                arr_time = "N/A"
+                dep_hour = 12
+                try:
+                    if departure_at != "N/A":
+                        dt = datetime.fromisoformat(departure_at.replace("Z", "+00:00"))
+                        dep_time = dt.strftime("%Y-%m-%d %H:%M")
+                        dep_hour = dt.hour
+                    if return_at != "N/A":
+                        dt = datetime.fromisoformat(return_at.replace("Z", "+00:00"))
+                        arr_time = dt.strftime("%Y-%m-%d %H:%M")
+                except:
+                    pass
+                
+                flights.append({
+                    'airline': airline,
+                    'price_usd': price_usd,
+                    'segments': [
+                        {
+                            'from_code': origin,
+                            'to_code': destination,
+                            'departure': dep_time,
+                            'arrival': arr_time,
+                            'duration': 0,
+                            'departure_hour': dep_hour
+                        }
+                    ],
+                    'total_segments': 1,
+                    'total_duration': 0,
+                    'stops': transfers,
+                    'flight_number': flight_number,
+                    'ticket_link': f"https://www.aviasales.com/search/{origin}{destination}{date.replace('-', '')}1"
+                })
+                logger.info(f"✈️ Aviasales: найден рейс {airline} {flight_number} за {price} RUB")
+        else:
+            logger.warning(f"⚠️ Aviasales: нет данных для маршрута {origin}→{destination}")
     except Exception as e:
         logger.error(f"❌ Aviasales парсинг ошибка: {e}")
     
@@ -1645,7 +1707,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         passengers=Passengers(adults=1),
                         language="en-US",
                     )
-                    result = get_flights(q)  # Убрали deep_search=True
+                    result = get_flights(q)
                     if result and len(result) > 0:
                         flights_data = parse_flight_data(result)
                         all_flights.extend(flights_data)
@@ -1654,7 +1716,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logger.error(f"❌ Ошибка Google Flights {from_city}→{to_city}: {e}")
         
-        # 2. Aviasales (GraphQL)
+        # 2. Aviasales (REST API)
         for from_city in from_codes:
             for to_city in to_codes:
                 try:
@@ -1710,11 +1772,9 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             response += f"🛫 Приоритетный аэропорт: {get_airport_name(favorite_airport)} ({favorite_airport})\n"
         response += f"\n📋 *Найдено {len(sorted_flights)} вариантов:*\n\n"
         
-        # Показываем ВСЕ рейсы
         for i, flight in enumerate(sorted_flights, 1):
             response += format_flight_card_compact(flight, index=i) + "\n\n"
         
-        # Рекомендованный вариант
         if best_overall:
             response += "⭐ *Рекомендованный вариант:*\n"
             response += format_flight_card_compact(best_overall) + "\n"
@@ -1790,7 +1850,7 @@ async def handle_manual_search(update: Update, text, context):
                         passengers=Passengers(adults=1),
                         language="en-US",
                     )
-                    result = get_flights(q)  # Убрали deep_search=True
+                    result = get_flights(q)
                     if result and len(result) > 0:
                         flights_data = parse_flight_data(result)
                         all_flights.extend(flights_data)
