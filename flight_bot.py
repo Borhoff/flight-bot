@@ -13,17 +13,19 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
 from dotenv import load_dotenv
+
+# Настраиваем логгер до использования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Пытаемся импортировать google-flights-search (если он установлен)
 try:
     from google_flights_search import FlightSearch
     GOOGLE_FLIGHTS_V2_AVAILABLE = True
+    logger.info("✅ google-flights-search доступен")
 except ImportError:
     GOOGLE_FLIGHTS_V2_AVAILABLE = False
-    logger.warning("⚠️ google-flights-search не установлен, используем fast-flights")
-
-load_dotenv()
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+    logger.warning("⚠️ google-flights-search НЕ установлен, используем fast-flights")
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 USD_TO_RUB = 95.0
