@@ -1,4 +1,5 @@
-python-telegram-bot==20.7
 fast-flights
-flask
+python-telegram-bot
+Flask
 requests
+python-dotenv
