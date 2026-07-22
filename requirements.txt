@@ -4,3 +4,5 @@ requests
 python-telegram-bot
 Flask
 python-dotenv
+selenium
+webdriver-manager
