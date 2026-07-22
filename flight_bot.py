@@ -161,34 +161,86 @@ def delete_search_history(user_id, history_id=None):
         return False
 
 def search_google_flights(origin, destination, date):
+    """
+    Улучшенный поиск через fast-flights с обработкой всех аэропортов города
+    """
     try:
         logger.info(f"📡 Google Flights запрос: {origin}→{destination} {date}")
-        q = create_query(
-            flights=[FlightQuery(date=date, from_airport=origin, to_airport=destination)],
-            seat="economy",
-            trip="one-way",
-            passengers=Passengers(adults=1),
-            language="en-US",
-        )
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            try:
-                result = get_flights(q)
-                if result and len(result) > 0:
-                    logger.info(f"✅ Google Flights: найдено {len(result)} рейсов для {origin}→{destination}")
-                    return parse_google_flights_result(result)
-                else:
-                    logger.warning(f"⚠️ Попытка {attempt+1}: рейсы не найдены для {origin}→{destination}")
-                    if attempt < max_attempts - 1:
-                        time.sleep(2)
-            except Exception as e:
-                logger.error(f"❌ Ошибка при попытке {attempt+1}: {e}")
-                if attempt < max_attempts - 1:
-                    time.sleep(3)
-                continue
-        return []
+        
+        # Словарь для расширения города до всех аэропортов
+        airports_map = {
+            "MOW": ["SVO", "DME", "VKO"],
+            "PAR": ["CDG", "ORY", "BVA"],
+            "LON": ["LHR", "LGW", "STN", "LCY"],
+            "NYC": ["JFK", "EWR", "LGA"],
+            "DXB": ["DXB", "DWC", "SHJ"],
+            "IST": ["IST", "SAW"],
+            "BKK": ["BKK", "DMK"],
+            "TYO": ["NRT", "HND"],
+        }
+        
+        # Получаем списки аэропортов
+        from_airports = airports_map.get(origin, [origin])
+        to_airports = airports_map.get(destination, [destination])
+        
+        all_flights = []
+        max_attempts = 2
+        
+        # Ищем по всем парам аэропортов
+        for from_ap in from_airports:
+            for to_ap in to_airports:
+                logger.info(f"  🔍 Поиск: {from_ap}→{to_ap}")
+                
+                try:
+                    q = create_query(
+                        flights=[FlightQuery(date=date, from_airport=from_ap, to_airport=to_ap)],
+                        seat="economy",
+                        trip="one-way",
+                        passengers=Passengers(adults=1),
+                        language="en-US",
+                    )
+                    
+                    for attempt in range(max_attempts):
+                        try:
+                            result = get_flights(q)
+                            if result and len(result) > 0:
+                                logger.info(f"  ✅ Найдено {len(result)} рейсов для {from_ap}→{to_ap}")
+                                parsed = parse_google_flights_result(result)
+                                all_flights.extend(parsed)
+                                break
+                            else:
+                                logger.warning(f"  ⚠️ Попытка {attempt+1}: рейсы не найдены")
+                                if attempt < max_attempts - 1:
+                                    time.sleep(1.5)
+                        except Exception as e:
+                            logger.error(f"  ❌ Ошибка при попытке {attempt+1}: {e}")
+                            if attempt < max_attempts - 1:
+                                time.sleep(2)
+                            continue
+                            
+                except Exception as e:
+                    logger.error(f"  ❌ Ошибка для {from_ap}→{to_ap}: {e}")
+                    continue
+        
+        # Убираем дубликаты (по авиакомпании, цене и времени)
+        unique_flights = []
+        seen = set()
+        for flight in sorted(all_flights, key=lambda x: x.get('price_usd', 9999)):
+            segments = flight.get('segments', [{}])
+            key = (
+                flight.get('airline', ''),
+                flight.get('price_usd', 0),
+                segments[0].get('departure', '') if segments else ''
+            )
+            if key not in seen:
+                seen.add(key)
+                unique_flights.append(flight)
+        
+        logger.info(f"📊 Всего найдено {len(unique_flights)} уникальных рейсов")
+        return unique_flights[:30]  # Возвращаем до 30 рейсов
+        
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка Google Flights для {origin}→{destination}: {e}")
+        logger.error(f"❌ Критическая ошибка Google Flights: {e}")
         return []
 
 def parse_google_flights_result(flights):
