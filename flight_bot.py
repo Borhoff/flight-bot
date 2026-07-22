@@ -14,7 +14,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
 from dotenv import load_dotenv
 
-# Настраиваем логгер до использования
+# Настраиваем логгер
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -27,10 +27,13 @@ except ImportError:
     GOOGLE_FLIGHTS_V2_AVAILABLE = False
     logger.warning("⚠️ google-flights-search НЕ установлен, используем fast-flights")
 
+load_dotenv()
+
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 USD_TO_RUB = 95.0
 TRAVELPAYOUTS_TOKEN = "eb631f12ac7f83fda4125614a6dd04bc"
 
+# --- FLASK для Render ---
 app_web = Flask(__name__)
 
 @app_web.route('/')
@@ -55,6 +58,7 @@ def keep_alive():
             pass
         time.sleep(600)
 
+# --- БАЗА ДАННЫХ ---
 def init_db():
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
@@ -168,26 +172,30 @@ def delete_search_history(user_id, history_id=None):
         logger.error(f"❌ Ошибка очистки истории: {e}")
         return False
 
+# =================================================================
+# ПАРСЕРЫ GOOGLE FLIGHTS
+# =================================================================
+
 def search_google_flights(origin, destination, date):
-    """
-    Поиск через google-flights-search (если доступен) или fast-flights
-    """
-    # Если библиотека установлена — используем её
+    """Главная функция — выбирает версию парсера"""
     if GOOGLE_FLIGHTS_V2_AVAILABLE:
         return search_google_flights_v2(origin, destination, date)
     else:
         return search_google_flights_fallback(origin, destination, date)
 
 def search_google_flights_v2(origin, destination, date):
-    """
-    Поиск через google-flights-search (полная выдача)
-    """
+    """Поиск через google-flights-search (полная выдача, включая Emirates)"""
     try:
         logger.info(f"📡 Google Flights (v2) запрос: {origin}→{destination} {date}")
         
         airports_map = {
             "MOW": ["SVO", "DME", "VKO"],
             "DXB": ["DXB", "DWC", "SHJ"],
+            "PAR": ["CDG", "ORY", "BVA"],
+            "LON": ["LHR", "LGW", "STN", "LCY"],
+            "NYC": ["JFK", "EWR", "LGA"],
+            "IST": ["IST", "SAW"],
+            "BKK": ["BKK", "DMK"],
         }
         
         from_airports = airports_map.get(origin, [origin])
@@ -223,7 +231,6 @@ def search_google_flights_v2(origin, destination, date):
                     logger.error(f"  ❌ Ошибка для {from_ap}→{to_ap}: {e}")
                     continue
         
-        # Убираем дубликаты
         unique_flights = []
         seen = set()
         for flight in sorted(all_flights, key=lambda x: x.get('price_usd', 9999)):
@@ -245,9 +252,7 @@ def search_google_flights_v2(origin, destination, date):
         return []
 
 def search_google_flights_fallback(origin, destination, date):
-    """
-    Резервный поиск через fast-flights
-    """
+    """Резервный поиск через fast-flights"""
     try:
         logger.info(f"📡 Google Flights (fallback) запрос: {origin}→{destination} {date}")
         
@@ -311,9 +316,7 @@ def search_google_flights_fallback(origin, destination, date):
         return []
 
 def parse_google_flights_v2(results):
-    """
-    Парсит результаты google-flights-search
-    """
+    """Парсит результаты google-flights-search"""
     flights_data = []
     try:
         for flight in results:
@@ -365,24 +368,47 @@ def parse_google_flights_v2(results):
     return flights_data
 
 def parse_google_flights_result(flights):
+    """Парсит результат fast-flights в единый формат"""
     if not flights:
         return []
+    
     flights_data = []
     try:
         for flight in flights:
-            price_usd = getattr(flight, 'price', 'N/A')
-            airlines = getattr(flight, 'airlines', ['N/A'])
+            if not flight:
+                continue
+                
+            price_usd = getattr(flight, 'price', None)
+            if price_usd is None or price_usd == 'N/A':
+                continue
+                
+            airlines = getattr(flight, 'airlines', None)
+            if not airlines:
+                continue
             airline = airlines[0] if airlines else 'N/A'
+            
             flight_list = getattr(flight, 'flights', [])
+            if not flight_list:
+                continue
+                
             segments = []
             total_duration = 0
+            
             for seg in flight_list:
+                if not seg:
+                    continue
                 seg_str = str(seg)
                 parsed = parse_single_flight_segment(seg_str)
-                segments.append(parsed)
-                if parsed.get('duration'):
-                    total_duration += parsed['duration']
+                if parsed and parsed.get('from_code') != 'N/A':
+                    segments.append(parsed)
+                    if parsed.get('duration'):
+                        total_duration += parsed['duration']
+            
+            if not segments:
+                continue
+                
             stops = len(segments) - 1
+            
             flights_data.append({
                 'airline': airline,
                 'price_usd': price_usd,
@@ -393,8 +419,11 @@ def parse_google_flights_result(flights):
                 'source': 'google-flights',
                 'ticket_link': f"https://www.google.com/travel/flights/search?tfs=CBwQAhooEgoyMDI2LTA3LTE1agcIARIDTVdXcgcIARIDSVNUcAGCAQsI____________AUABSAGYAQE"
             })
+            
     except Exception as e:
         logger.error(f"❌ Ошибка парсинга Google Flights: {e}")
+        return flights_data if flights_data else []
+    
     return flights_data
 
 def parse_single_flight_segment(seg_str):
@@ -435,6 +464,7 @@ def parse_single_flight_segment(seg_str):
         logger.error(f"❌ Ошибка парсинга сегмента: {e}")
     return result
 
+# --- AVIASALES API ---
 def search_aviasales(origin, destination, date):
     try:
         url = "https://api.travelpayouts.com/v1/prices/cheap"
@@ -513,22 +543,27 @@ def parse_aviasales_result(data, origin, destination, date):
         logger.error(f"❌ Aviasales парсинг ошибка: {e}")
     return flights
 
+# --- ОСНОВНАЯ ФУНКЦИЯ ПОИСКА ---
 def search_all_flights(from_city, to_city, date):
     all_flights = []
+    
     logger.info(f"🔍 Поиск в Google Flights...")
     google_results = search_google_flights(from_city, to_city, date)
     if google_results:
         all_flights.extend(google_results)
         logger.info(f"✅ Google Flights: найдено {len(google_results)} рейсов")
+    
     logger.info(f"🔍 Поиск в Aviasales...")
     aviasales_results = search_aviasales(from_city, to_city, date)
     if aviasales_results:
         all_flights.extend(aviasales_results)
         logger.info(f"✅ Aviasales: найдено {len(aviasales_results)} рейсов")
+    
     all_flights.sort(key=lambda x: x.get('price_usd', 9999))
     logger.info(f"📊 Всего найдено {len(all_flights)} рейсов")
     return all_flights
 
+# --- БАЗА АЭРОПОРТОВ ---
 def load_airports():
     city_to_iata = {}
     airport_names = {}
@@ -720,6 +755,7 @@ def find_city_code(city_name):
 def get_airport_name(iata_code):
     return AIRPORT_NAMES.get(iata_code, iata_code)
 
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 MONTHS_RU = {1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля', 5: 'мая', 6: 'июня', 7: 'июля', 8: 'августа', 9: 'сентября', 10: 'октября', 11: 'ноября', 12: 'декабря'}
 WEEKDAYS_RU = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'}
 CITIES = {"Стамбул": "IST", "Дубай": "DXB", "Пекин": "PEK", "Шанхай": "PVG", "Бангкок": "BKK", "Анталья": "AYT", "Ереван": "EVN", "Астана": "NQZ", "Ташкент": "TAS", "Баку": "GYD", "Тбилиси": "TBS", "Сочи": "AER", "Калининград": "KGD", "Санкт-Петербург": "LED", "Париж": "CDG", "Лондон": "LHR"}
@@ -846,6 +882,7 @@ def get_reason_compact(flight, prefs):
     reasons.append({"price": "📊 цена", "speed": "📊 скорость", "comfort": "📊 комфорт", "convenience": "📊 удобство", "balance": "📊 баланс"}.get(priority, "📊 баланс"))
     return "✅ " + ", ".join(reasons[:3])
 
+# --- КЛАВИАТУРЫ ---
 def get_main_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("✈️ Начать поиск")],
@@ -1019,6 +1056,7 @@ def get_history_keyboard(user_id):
     buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="back_to_main")])
     return InlineKeyboardMarkup(buttons)
 
+# --- ОБРАБОТЧИКИ ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     init_db()
     user_id = update.effective_user.id
@@ -1591,18 +1629,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"✅ Выбрана дата: *{date}*", parse_mode="Markdown")
         await perform_search(update, context, is_callback=True)
 
+# --- ЗАПУСК ---
 def main():
     init_db()
+    
+    # Запускаем Flask сервер в отдельном потоке
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
+    
+    # Запускаем пинг в отдельном потоке
     ping_thread = threading.Thread(target=keep_alive, daemon=True)
     ping_thread.start()
     
+    # Создаем приложение Telegram бота
     application = Application.builder().token(TOKEN).build()
+    
+    # Регистрируем обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(callback_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
+    # Запускаем бота
     print("✅ Бот запущен!")
     application.run_polling()
 
