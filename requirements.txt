@@ -1,6 +1,6 @@
 fast-flights
+google-flights-search
+requests
 python-telegram-bot
 Flask
-requests
 python-dotenv
-google-flights-search
