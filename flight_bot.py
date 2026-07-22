@@ -13,6 +13,12 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
 from dotenv import load_dotenv
+try:
+    from google_flights_search import FlightSearch
+    GOOGLE_FLIGHTS_V2_AVAILABLE = True
+except ImportError:
+    GOOGLE_FLIGHTS_V2_AVAILABLE = False
+    logger.warning("⚠️ google-flights-search не установлен, используем fast-flights")
 
 load_dotenv()
 
@@ -162,12 +168,21 @@ def delete_search_history(user_id, history_id=None):
 
 def search_google_flights(origin, destination, date):
     """
-    Поиск через fast-flights с максимальным количеством результатов
+    Поиск через google-flights-search (если доступен) или fast-flights
+    """
+    # Если библиотека установлена — используем её
+    if GOOGLE_FLIGHTS_V2_AVAILABLE:
+        return search_google_flights_v2(origin, destination, date)
+    else:
+        return search_google_flights_fallback(origin, destination, date)
+
+def search_google_flights_v2(origin, destination, date):
+    """
+    Поиск через google-flights-search (полная выдача)
     """
     try:
-        logger.info(f"📡 Google Flights запрос: {origin}→{destination} {date}")
+        logger.info(f"📡 Google Flights (v2) запрос: {origin}→{destination} {date}")
         
-        # Все аэропорты Москвы и Дубая
         airports_map = {
             "MOW": ["SVO", "DME", "VKO"],
             "DXB": ["DXB", "DWC", "SHJ"],
@@ -180,47 +195,33 @@ def search_google_flights(origin, destination, date):
         
         for from_ap in from_airports:
             for to_ap in to_airports:
-                # Пропускаем проблемные аэропорты
-                if to_ap in ["DWC", "SHJ"]:
-                    logger.info(f"  ⏭️ Пропускаем {from_ap}→{to_ap} (проблемный аэропорт)")
-                    continue
-                    
-                logger.info(f"  🔍 Поиск: {from_ap}→{to_ap}")
-                
                 try:
-                    q = create_query(
-                        flights=[FlightQuery(date=date, from_airport=from_ap, to_airport=to_ap)],
-                        seat="economy",
-                        trip="one-way",
-                        passengers=Passengers(adults=1),
-                        language="en-US",
+                    logger.info(f"  🔍 Поиск: {from_ap}→{to_ap}")
+                    
+                    search = FlightSearch(
+                        from_airport=from_ap,
+                        to_airport=to_ap,
+                        date=date,
+                        adults=1,
+                        children=0,
+                        infants=0,
+                        travel_class="ECONOMY"
                     )
                     
-                    # Делаем несколько попыток
-                    for attempt in range(3):
-                        try:
-                            result = get_flights(q)
-                            if result and len(result) > 0:
-                                logger.info(f"  ✅ Найдено {len(result)} рейсов для {from_ap}→{to_ap}")
-                                parsed = parse_google_flights_result(result)
-                                if parsed:
-                                    all_flights.extend(parsed)
-                                break
-                            else:
-                                logger.warning(f"  ⚠️ Попытка {attempt+1}: рейсы не найдены")
-                                if attempt < 2:
-                                    time.sleep(2)
-                        except Exception as e:
-                            logger.error(f"  ❌ Ошибка при попытке {attempt+1}: {e}")
-                            if attempt < 2:
-                                time.sleep(3)
-                            continue
-                            
+                    results = search.get_results()
+                    
+                    if results and len(results) > 0:
+                        logger.info(f"  ✅ Найдено {len(results)} рейсов для {from_ap}→{to_ap}")
+                        parsed = parse_google_flights_v2(results)
+                        all_flights.extend(parsed)
+                    else:
+                        logger.warning(f"  ⚠️ Рейсы не найдены для {from_ap}→{to_ap}")
+                        
                 except Exception as e:
                     logger.error(f"  ❌ Ошибка для {from_ap}→{to_ap}: {e}")
                     continue
         
-        # Убираем дубликаты и сортируем
+        # Убираем дубликаты
         unique_flights = []
         seen = set()
         for flight in sorted(all_flights, key=lambda x: x.get('price_usd', 9999)):
@@ -235,35 +236,131 @@ def search_google_flights(origin, destination, date):
                 unique_flights.append(flight)
         
         logger.info(f"📊 Всего найдено {len(unique_flights)} уникальных рейсов")
+        return unique_flights[:30]
         
-        # Если рейсов мало, пробуем найти через прямой поиск по городу
-        if len(unique_flights) < 10:
-            logger.info(f"  🔄 Мало рейсов, пробуем прямой поиск по городу...")
-            try:
-                q = create_query(
-                    flights=[FlightQuery(date=date, from_airport=origin, to_airport=destination)],
-                    seat="economy",
-                    trip="one-way",
-                    passengers=Passengers(adults=1),
-                    language="en-US",
-                )
-                result = get_flights(q)
-                if result and len(result) > 0:
-                    logger.info(f"  ✅ Прямой поиск нашёл {len(result)} рейсов")
-                    parsed = parse_google_flights_result(result)
-                    if parsed:
-                        # Добавляем новые рейсы, которых ещё нет
-                        for flight in parsed:
-                            if flight not in unique_flights:
-                                unique_flights.append(flight)
-            except Exception as e:
-                logger.error(f"  ❌ Ошибка прямого поиска: {e}")
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка Google Flights v2: {e}")
+        return []
+
+def search_google_flights_fallback(origin, destination, date):
+    """
+    Резервный поиск через fast-flights
+    """
+    try:
+        logger.info(f"📡 Google Flights (fallback) запрос: {origin}→{destination} {date}")
+        
+        airports_map = {
+            "MOW": ["SVO", "DME", "VKO"],
+            "DXB": ["DXB"],
+        }
+        
+        from_airports = airports_map.get(origin, [origin])
+        to_airports = airports_map.get(destination, [destination])
+        
+        all_flights = []
+        
+        for from_ap in from_airports:
+            for to_ap in to_airports:
+                try:
+                    q = create_query(
+                        flights=[FlightQuery(date=date, from_airport=from_ap, to_airport=to_ap)],
+                        seat="economy",
+                        trip="one-way",
+                        passengers=Passengers(adults=1),
+                        language="en-US",
+                    )
+                    
+                    for attempt in range(2):
+                        try:
+                            result = get_flights(q)
+                            if result and len(result) > 0:
+                                logger.info(f"  ✅ Найдено {len(result)} рейсов для {from_ap}→{to_ap}")
+                                parsed = parse_google_flights_result(result)
+                                all_flights.extend(parsed)
+                                break
+                            else:
+                                if attempt < 1:
+                                    time.sleep(1.5)
+                        except Exception as e:
+                            logger.error(f"  ❌ Ошибка: {e}")
+                            continue
+                            
+                except Exception as e:
+                    logger.error(f"  ❌ Ошибка для {from_ap}→{to_ap}: {e}")
+                    continue
+        
+        unique_flights = []
+        seen = set()
+        for flight in sorted(all_flights, key=lambda x: x.get('price_usd', 9999)):
+            segments = flight.get('segments', [{}])
+            key = (
+                flight.get('airline', ''),
+                flight.get('price_usd', 0),
+                segments[0].get('departure', '') if segments else ''
+            )
+            if key not in seen:
+                seen.add(key)
+                unique_flights.append(flight)
         
         return unique_flights[:30]
         
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка Google Flights: {e}")
+        logger.error(f"❌ Критическая ошибка Google Flights fallback: {e}")
         return []
+
+def parse_google_flights_v2(results):
+    """
+    Парсит результаты google-flights-search
+    """
+    flights_data = []
+    try:
+        for flight in results:
+            airline = getattr(flight, 'airline', 'N/A')
+            price = getattr(flight, 'price', 0)
+            currency = getattr(flight, 'currency', 'USD')
+            
+            price_usd = price if currency == 'USD' else round(price / 95, 2)
+            
+            segments = []
+            total_duration = 0
+            
+            seg_list = getattr(flight, 'segments', [])
+            for seg in seg_list:
+                from_code = getattr(seg, 'origin_airport', 'N/A')
+                to_code = getattr(seg, 'destination_airport', 'N/A')
+                dep_time = getattr(seg, 'departure_time', 'N/A')
+                arr_time = getattr(seg, 'arrival_time', 'N/A')
+                duration = getattr(seg, 'duration', 0)
+                
+                segments.append({
+                    'from_code': from_code,
+                    'to_code': to_code,
+                    'departure': dep_time,
+                    'arrival': arr_time,
+                    'duration': duration,
+                    'departure_hour': int(dep_time[11:13]) if dep_time != 'N/A' else 12
+                })
+                
+                if duration:
+                    total_duration += duration
+            
+            stops = len(segments) - 1
+            
+            flights_data.append({
+                'airline': airline,
+                'price_usd': price_usd,
+                'segments': segments,
+                'total_segments': len(segments),
+                'total_duration': total_duration,
+                'stops': stops,
+                'source': 'google-flights-v2',
+                'ticket_link': getattr(flight, 'booking_link', 'https://www.google.com/travel/flights')
+            })
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка парсинга google-flights-search: {e}")
+    
+    return flights_data
 
 def parse_google_flights_result(flights):
     if not flights:
