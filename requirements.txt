@@ -6,3 +6,4 @@ Flask
 python-dotenv
 selenium
 webdriver-manager
+flights
