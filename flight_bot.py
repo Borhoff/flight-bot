@@ -190,21 +190,26 @@ def delete_search_history(user_id, history_id=None):
 # НОВАЯ ФУНКЦИЯ ДЛЯ FLI
 # =================================================================
 def search_fli(origin, destination, date):
-    """Поиск через fli (Google Flights API)"""
+    """Поиск через fli (Google Flights API) с правильными кодами"""
     try:
         logger.info(f"📡 fli запрос: {origin}→{destination} {date}")
         
-        # Пробуем разные форматы для кодов
-        from_airport = origin
-        to_airport = destination
+        # Получаем Enum-значение для аэропорта
+        from_airport = getattr(Airport, origin, None)
+        to_airport = getattr(Airport, destination, None)
         
-        # Создаём фильтры с прямыми IATA-кодами
+        if not from_airport or not to_airport:
+            logger.error(f"❌ fli: неизвестный код аэропорта {origin} или {destination}")
+            logger.info(f"   Доступные коды: SVO, DME, VKO, DXB, IST, LHR, JFK и др.")
+            return []
+        
+        # Создаём фильтры
         filters = FlightSearchFilters(
             passenger_info=PassengerInfo(adults=1),
             flight_segments=[
                 FlightSegment(
-                    departure_airport=[[from_airport, 0]],
-                    arrival_airport=[[to_airport, 0]],
+                    departure_airport=[[from_airport, 0]],  # <--- ПРАВИЛЬНО
+                    arrival_airport=[[to_airport, 0]],      # <--- ПРАВИЛЬНО
                     travel_date=date,
                 )
             ],
@@ -213,6 +218,7 @@ def search_fli(origin, destination, date):
             sort_by=SortBy.CHEAPEST,
         )
         
+        # Выполняем поиск
         search = SearchFlights()
         flights = search.search(filters)
         
