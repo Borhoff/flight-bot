@@ -337,6 +337,11 @@ def search_google_flights_fallback(origin, destination, date):
         airports_map = {
             "MOW": ["SVO", "DME", "VKO"],
             "DXB": ["DXB", "DWC", "SHJ"],
+            "LON": ["LHR", "LGW", "STN", "LCY"],
+            "NYC": ["JFK", "EWR", "LGA"],
+            "PAR": ["CDG", "ORY", "BVA"],
+            "IST": ["IST", "SAW"],
+            "BKK": ["BKK", "DMK"],
         }
         
         from_airports = airports_map.get(origin, [origin])
@@ -347,7 +352,7 @@ def search_google_flights_fallback(origin, destination, date):
         
         for from_ap in from_airports:
             for to_ap in to_airports:
-                # Пропускаем проблемные аэропорты
+                # Пропускаем проблемные аэропорты (иногда они не работают)
                 if to_ap in ["DWC", "SHJ"]:
                     continue
                     
@@ -395,12 +400,22 @@ def search_google_flights_fallback(origin, destination, date):
                 passengers=Passengers(adults=1),
                 language="en-US",
             )
-            result = get_flights(q)
-            if result and len(result) > 0:
-                logger.info(f"  ✅ Прямой поиск нашёл {len(result)} рейсов")
-                parsed = parse_google_flights_result(result)
-                if parsed:
-                    all_flights.extend(parsed)
+            for attempt in range(max_attempts):
+                try:
+                    result = get_flights(q)
+                    if result and len(result) > 0:
+                        logger.info(f"  ✅ Прямой поиск нашёл {len(result)} рейсов")
+                        parsed = parse_google_flights_result(result)
+                        if parsed:
+                            all_flights.extend(parsed)
+                        break
+                    else:
+                        if attempt < max_attempts - 1:
+                            time.sleep(2)
+                except Exception as e:
+                    logger.error(f"  ❌ Ошибка прямого поиска: {e}")
+                    if attempt < max_attempts - 1:
+                        time.sleep(2)
         except Exception as e:
             logger.error(f"  ❌ Ошибка прямого поиска: {e}")
         
