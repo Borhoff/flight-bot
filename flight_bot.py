@@ -14,6 +14,21 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
 from dotenv import load_dotenv
 
+# --- НОВЫЙ ИМПОРТ ДЛЯ FLI ---
+from fli.models import (
+    Airport,
+    PassengerInfo,
+    SeatType,
+    MaxStops,
+    SortBy,
+    FlightSearchFilters,
+    FlightSegment
+)
+from fli.search import SearchFlights
+
+# Загружаем переменные окружения
+load_dotenv()
+
 # Настраиваем логгер
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,13 +42,11 @@ except ImportError:
     GOOGLE_FLIGHTS_V2_AVAILABLE = False
     logger.warning("⚠️ google-flights-search НЕ установлен, используем fast-flights")
 
-load_dotenv()
-
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 USD_TO_RUB = 95.0
 TRAVELPAYOUTS_TOKEN = "eb631f12ac7f83fda4125614a6dd04bc"
 
-# --- FLASK для Render ---
+# --- FLASK для веб-сервера (для Render) ---
 app_web = Flask(__name__)
 
 @app_web.route('/')
@@ -48,6 +61,7 @@ def run_web_server():
     port = int(os.environ.get("PORT", 10000))
     app_web.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
 
+# --- АВТОПИНГ для поддержания активности ---
 def keep_alive():
     url = "http://localhost:10000/"
     while True:
@@ -173,7 +187,80 @@ def delete_search_history(user_id, history_id=None):
         return False
 
 # =================================================================
-# ПАРСЕРЫ GOOGLE FLIGHTS
+# НОВАЯ ФУНКЦИЯ ДЛЯ FLI
+# =================================================================
+def search_fli(origin, destination, date):
+    """Поиск через fli (Google Flights API)"""
+    try:
+        logger.info(f"📡 fli запрос: {origin}→{destination} {date}")
+        
+        # Конвертируем IATA-коды в формат, который понимает fli
+        from_airport = getattr(Airport, origin, None)
+        to_airport = getattr(Airport, destination, None)
+        
+        if not from_airport or not to_airport:
+            logger.error(f"❌ fli: неизвестный код аэропорта {origin} или {destination}")
+            return []
+        
+        filters = FlightSearchFilters(
+            passenger_info=PassengerInfo(adults=1),
+            flight_segments=[
+                FlightSegment(
+                    departure_airport=[[from_airport, 0]],
+                    arrival_airport=[[to_airport, 0]],
+                    travel_date=date,
+                )
+            ],
+            seat_type=SeatType.ECONOMY,
+            stops=MaxStops.ANY,
+            sort_by=SortBy.CHEAPEST,
+        )
+        
+        search = SearchFlights()
+        flights = search.search(filters)
+        
+        if not flights:
+            logger.warning(f"⚠️ fli: рейсы не найдены для {origin}→{destination}")
+            return []
+        
+        # Парсим результаты в наш формат
+        parsed = []
+        for flight in flights[:30]:  # Берём первые 30 рейсов
+            segments = []
+            total_duration = 0
+            for leg in flight.legs:
+                dep_time = leg.departure_datetime.strftime("%Y-%m-%d %H:%M")
+                arr_time = leg.arrival_datetime.strftime("%Y-%m-%d %H:%M")
+                segments.append({
+                    'from_code': leg.departure_airport.value,
+                    'to_code': leg.arrival_airport.value,
+                    'departure': dep_time,
+                    'arrival': arr_time,
+                    'duration': 0,
+                    'departure_hour': leg.departure_datetime.hour
+                })
+                total_duration += int((leg.arrival_datetime - leg.departure_datetime).total_seconds() // 60)
+            
+            parsed.append({
+                'airline': flight.airline_name,
+                'price_usd': round(flight.price, 2),
+                'segments': segments,
+                'total_segments': len(segments),
+                'total_duration': total_duration,
+                'stops': flight.stops,
+                'source': 'fli',
+                'ticket_link': f"https://www.google.com/travel/flights"
+            })
+        
+        logger.info(f"✅ fli: найдено {len(parsed)} рейсов для {origin}→{destination}")
+        return parsed
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка fli для {origin}→{destination}: {e}")
+        return []
+
+# =================================================================
+# ПАРСЕРЫ GOOGLE FLIGHTS (fast-flights и google-flights-search)
 # =================================================================
 
 def search_google_flights(origin, destination, date):
@@ -184,18 +271,13 @@ def search_google_flights(origin, destination, date):
         return search_google_flights_fallback(origin, destination, date)
 
 def search_google_flights_v2(origin, destination, date):
-    """Поиск через google-flights-search (полная выдача, включая Emirates)"""
+    """Поиск через google-flights-search (полная выдача)"""
     try:
         logger.info(f"📡 Google Flights (v2) запрос: {origin}→{destination} {date}")
         
         airports_map = {
             "MOW": ["SVO", "DME", "VKO"],
             "DXB": ["DXB", "DWC", "SHJ"],
-            "PAR": ["CDG", "ORY", "BVA"],
-            "LON": ["LHR", "LGW", "STN", "LCY"],
-            "NYC": ["JFK", "EWR", "LGA"],
-            "IST": ["IST", "SAW"],
-            "BKK": ["BKK", "DMK"],
         }
         
         from_airports = airports_map.get(origin, [origin])
@@ -543,21 +625,36 @@ def parse_aviasales_result(data, origin, destination, date):
         logger.error(f"❌ Aviasales парсинг ошибка: {e}")
     return flights
 
-# --- ОСНОВНАЯ ФУНКЦИЯ ПОИСКА ---
+# =================================================================
+# ОСНОВНАЯ ФУНКЦИЯ ПОИСКА (ОБНОВЛЕНА)
+# =================================================================
 def search_all_flights(from_city, to_city, date):
     all_flights = []
     
-    logger.info(f"🔍 Поиск в Google Flights...")
-    google_results = search_google_flights(from_city, to_city, date)
-    if google_results:
-        all_flights.extend(google_results)
-        logger.info(f"✅ Google Flights: найдено {len(google_results)} рейсов")
+    # 1. Пробуем fli (Google Flights через API)
+    logger.info(f"🔍 Поиск через fli...")
+    fli_results = search_fli(from_city, to_city, date)
+    if fli_results:
+        all_flights.extend(fli_results)
+        logger.info(f"✅ fli: найдено {len(fli_results)} рейсов")
     
-    logger.info(f"🔍 Поиск в Aviasales...")
-    aviasales_results = search_aviasales(from_city, to_city, date)
-    if aviasales_results:
-        all_flights.extend(aviasales_results)
-        logger.info(f"✅ Aviasales: найдено {len(aviasales_results)} рейсов")
+    # 2. Если fli не дал результатов — используем старые методы
+    if not all_flights:
+        logger.info(f"🔍 fli не дал результатов, используем fallback...")
+        
+        # Google Flights через fast-flights
+        logger.info(f"🔍 Поиск в Google Flights (fast-flights)...")
+        google_results = search_google_flights(from_city, to_city, date)
+        if google_results:
+            all_flights.extend(google_results)
+            logger.info(f"✅ Google Flights: найдено {len(google_results)} рейсов")
+        
+        # Aviasales
+        logger.info(f"🔍 Поиск в Aviasales...")
+        aviasales_results = search_aviasales(from_city, to_city, date)
+        if aviasales_results:
+            all_flights.extend(aviasales_results)
+            logger.info(f"✅ Aviasales: найдено {len(aviasales_results)} рейсов")
     
     all_flights.sort(key=lambda x: x.get('price_usd', 9999))
     logger.info(f"📊 Всего найдено {len(all_flights)} рейсов")
