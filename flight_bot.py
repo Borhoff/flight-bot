@@ -194,14 +194,11 @@ def search_fli(origin, destination, date):
     try:
         logger.info(f"📡 fli запрос: {origin}→{destination} {date}")
         
-        # Конвертируем IATA-коды в формат, который понимает fli
-        from_airport = getattr(Airport, origin, None)
-        to_airport = getattr(Airport, destination, None)
+        # Пробуем разные форматы для кодов
+        from_airport = origin
+        to_airport = destination
         
-        if not from_airport or not to_airport:
-            logger.error(f"❌ fli: неизвестный код аэропорта {origin} или {destination}")
-            return []
-        
+        # Создаём фильтры с прямыми IATA-кодами
         filters = FlightSearchFilters(
             passenger_info=PassengerInfo(adults=1),
             flight_segments=[
@@ -223,9 +220,9 @@ def search_fli(origin, destination, date):
             logger.warning(f"⚠️ fli: рейсы не найдены для {origin}→{destination}")
             return []
         
-        # Парсим результаты в наш формат
+        # Парсим результаты
         parsed = []
-        for flight in flights[:30]:  # Берём первые 30 рейсов
+        for flight in flights[:30]:
             segments = []
             total_duration = 0
             for leg in flight.legs:
