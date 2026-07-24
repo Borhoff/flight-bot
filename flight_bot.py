@@ -478,29 +478,36 @@ def parse_google_flights_v2(results):
     return flights_data
 
 def parse_google_flights_result(flights):
-    """Парсит результат fast-flights в единый формат"""
+    """
+    Парсит результат fast-flights в единый формат с проверками
+    """
     if not flights:
         return []
     
     flights_data = []
     try:
         for flight in flights:
+            # Проверяем, что flight не None
             if not flight:
                 continue
                 
+            # Проверяем цену
             price_usd = getattr(flight, 'price', None)
             if price_usd is None or price_usd == 'N/A':
                 continue
                 
+            # Проверяем авиакомпанию
             airlines = getattr(flight, 'airlines', None)
-            if not airlines:
+            if not airlines or len(airlines) == 0:
                 continue
             airline = airlines[0] if airlines else 'N/A'
             
+            # Проверяем сегменты перелёта
             flight_list = getattr(flight, 'flights', [])
-            if not flight_list:
+            if not flight_list or len(flight_list) == 0:
                 continue
                 
+            # Парсим сегменты
             segments = []
             total_duration = 0
             
@@ -514,6 +521,7 @@ def parse_google_flights_result(flights):
                     if parsed.get('duration'):
                         total_duration += parsed['duration']
             
+            # Проверяем, что есть хотя бы один сегмент
             if not segments:
                 continue
                 
@@ -532,10 +540,10 @@ def parse_google_flights_result(flights):
             
     except Exception as e:
         logger.error(f"❌ Ошибка парсинга Google Flights: {e}")
+        # Возвращаем то, что уже спарсили, если ошибка не критична
         return flights_data if flights_data else []
     
     return flights_data
-
 def parse_single_flight_segment(seg_str):
     result = {
         'from_airport': 'N/A',
@@ -659,30 +667,26 @@ def parse_aviasales_result(data, origin, destination, date):
 def search_all_flights(from_city, to_city, date):
     all_flights = []
     
-    # 1. Пробуем fli (Google Flights через API)
-    logger.info(f"🔍 Поиск через fli...")
-    fli_results = search_fli(from_city, to_city, date)
-    if fli_results:
-        all_flights.extend(fli_results)
-        logger.info(f"✅ fli: найдено {len(fli_results)} рейсов")
+    # 1. Пробуем fli (пока отключено)
+    # logger.info(f"🔍 Поиск через fli...")
+    # fli_results = search_fli(from_city, to_city, date)
+    # if fli_results:
+    #     all_flights.extend(fli_results)
+    #     logger.info(f"✅ fli: найдено {len(fli_results)} рейсов")
     
-    # 2. Если fli не дал результатов — используем старые методы
-    if not all_flights:
-        logger.info(f"🔍 fli не дал результатов, используем fallback...")
-        
-        # Google Flights через fast-flights
-        logger.info(f"🔍 Поиск в Google Flights (fast-flights)...")
-        google_results = search_google_flights(from_city, to_city, date)
-        if google_results:
-            all_flights.extend(google_results)
-            logger.info(f"✅ Google Flights: найдено {len(google_results)} рейсов")
-        
-        # Aviasales
-        logger.info(f"🔍 Поиск в Aviasales...")
-        aviasales_results = search_aviasales(from_city, to_city, date)
-        if aviasales_results:
-            all_flights.extend(aviasales_results)
-            logger.info(f"✅ Aviasales: найдено {len(aviasales_results)} рейсов")
+    # 2. Используем улучшенный fallback
+    logger.info(f"🔍 Поиск в Google Flights (улучшенный fast-flights)...")
+    google_results = search_google_flights_fallback(from_city, to_city, date)
+    if google_results:
+        all_flights.extend(google_results)
+        logger.info(f"✅ Google Flights: найдено {len(google_results)} рейсов")
+    
+    # 3. Aviasales
+    logger.info(f"🔍 Поиск в Aviasales...")
+    aviasales_results = search_aviasales(from_city, to_city, date)
+    if aviasales_results:
+        all_flights.extend(aviasales_results)
+        logger.info(f"✅ Aviasales: найдено {len(aviasales_results)} рейсов")
     
     all_flights.sort(key=lambda x: x.get('price_usd', 9999))
     logger.info(f"📊 Всего найдено {len(all_flights)} рейсов")
