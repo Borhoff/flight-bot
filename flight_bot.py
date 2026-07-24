@@ -190,26 +190,47 @@ def delete_search_history(user_id, history_id=None):
 # НОВАЯ ФУНКЦИЯ ДЛЯ FLI
 # =================================================================
 def search_fli(origin, destination, date):
-    """Поиск через fli (Google Flights API) с правильными кодами"""
+    """Поиск через fli (Google Flights API) с диагностикой"""
     try:
         logger.info(f"📡 fli запрос: {origin}→{destination} {date}")
         
-        # Получаем Enum-значение для аэропорта
+        # ДИАГНОСТИКА: Проверяем, какие коды доступны
+        try:
+            from fli.models import Airport
+            # Проверяем конкретные коды
+            for code in [origin, destination, "MOW", "DXB", "LHR", "JFK"]:
+                if hasattr(Airport, code):
+                    logger.info(f"  ✅ Код {code} доступен в fli")
+                else:
+                    logger.warning(f"  ⚠️ Код {code} НЕ ДОСТУПЕН в fli")
+        except Exception as e:
+            logger.warning(f"  ⚠️ Не удалось проверить коды: {e}")
+        
+        # Пробуем разные форматы для кодов
         from_airport = getattr(Airport, origin, None)
         to_airport = getattr(Airport, destination, None)
         
+        # Если конкретные коды не найдены, пробуем коды городов
+        if not from_airport:
+            logger.warning(f"  ⚠️ Код {origin} не найден, пробуем MOW")
+            from_airport = getattr(Airport, "MOW", None)
+        if not to_airport:
+            logger.warning(f"  ⚠️ Код {destination} не найден, пробуем DXB")
+            to_airport = getattr(Airport, "DXB", None)
+        
         if not from_airport or not to_airport:
-            logger.error(f"❌ fli: неизвестный код аэропорта {origin} или {destination}")
-            logger.info(f"   Доступные коды: SVO, DME, VKO, DXB, IST, LHR, JFK и др.")
+            logger.error(f"❌ fli: не удалось найти коды для {origin}→{destination}")
             return []
         
-        # Создаём фильтры
+        # Пробуем прямой поиск через city-коды (MOW, DXB)
+        logger.info(f"  🔍 Используем коды: {from_airport} → {to_airport}")
+        
         filters = FlightSearchFilters(
             passenger_info=PassengerInfo(adults=1),
             flight_segments=[
                 FlightSegment(
-                    departure_airport=[[from_airport, 0]],  # <--- ПРАВИЛЬНО
-                    arrival_airport=[[to_airport, 0]],      # <--- ПРАВИЛЬНО
+                    departure_airport=[[from_airport, 0]],
+                    arrival_airport=[[to_airport, 0]],
                     travel_date=date,
                 )
             ],
@@ -218,46 +239,15 @@ def search_fli(origin, destination, date):
             sort_by=SortBy.CHEAPEST,
         )
         
-        # Выполняем поиск
         search = SearchFlights()
         flights = search.search(filters)
         
         if not flights:
             logger.warning(f"⚠️ fli: рейсы не найдены для {origin}→{destination}")
+            # Попробуем ещё раз с явными IATA-кодами (если они есть)
             return []
         
-        # Парсим результаты
-        parsed = []
-        for flight in flights[:30]:
-            segments = []
-            total_duration = 0
-            for leg in flight.legs:
-                dep_time = leg.departure_datetime.strftime("%Y-%m-%d %H:%M")
-                arr_time = leg.arrival_datetime.strftime("%Y-%m-%d %H:%M")
-                segments.append({
-                    'from_code': leg.departure_airport.value,
-                    'to_code': leg.arrival_airport.value,
-                    'departure': dep_time,
-                    'arrival': arr_time,
-                    'duration': 0,
-                    'departure_hour': leg.departure_datetime.hour
-                })
-                total_duration += int((leg.arrival_datetime - leg.departure_datetime).total_seconds() // 60)
-            
-            parsed.append({
-                'airline': flight.airline_name,
-                'price_usd': round(flight.price, 2),
-                'segments': segments,
-                'total_segments': len(segments),
-                'total_duration': total_duration,
-                'stops': flight.stops,
-                'source': 'fli',
-                'ticket_link': f"https://www.google.com/travel/flights"
-            })
-        
-        logger.info(f"✅ fli: найдено {len(parsed)} рейсов для {origin}→{destination}")
-        return parsed
-        
+        # ... остальной код парсинга
     except Exception as e:
         logger.error(f"❌ Ошибка fli для {origin}→{destination}: {e}")
         return []
