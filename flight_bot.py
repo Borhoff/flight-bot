@@ -258,35 +258,86 @@ def search_fli(origin, destination, date):
 
 def search_google_flights(origin, destination, date):
     """Главная функция — выбирает версию парсера"""
+     # Сначала пробуем google-flights-search (v2)
     if GOOGLE_FLIGHTS_V2_AVAILABLE:
-        return search_google_flights_v2(origin, destination, date)
-    else:
-        return search_google_flights_fallback(origin, destination, date)
-
-
-INFO:__main__:🔍 Поиск в Google Flights (улучшенный fast-flights)...
-INFO:__main__:📡 Google Flights (улучшенный fallback) запрос: SVO→DXB 2026-08-01
-INFO:__main__:  🔍 Поиск: SVO→DXB
-INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDU1ZPcgUSA0RYQkIBAUgBmAEC&hl=en-US&curr= 200
-ERROR:__main__:  ❌ Ошибка при попытке 1: list index out of range
-INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDU1ZPcgUSA0RYQkIBAUgBmAEC&hl=en-US&curr= 200
-ERROR:__main__:  ❌ Ошибка при попытке 2: no flights found; received error
-INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDU1ZPcgUSA0RYQkIBAUgBmAEC&hl=en-US&curr= 200
-ERROR:__main__:  ❌ Ошибка при попытке 3: list index out of range
-INFO:__main__:  🔍 Прямой поиск: SVO→DXB
-INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDU1ZPcgUSA0RYQkIBAUgBmAEC&hl=en-US&curr= 200
-ERROR:__main__:  ❌ Ошибка прямого поиска: list index out of range
-INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDU1ZPcgUSA0RYQkIBAUgBmAEC&hl=en-US&curr= 200
-ERROR:__main__:  ❌ Ошибка прямого поиска: list index out of range
-INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDU1ZPcgUSA0RYQkIBAUgBmAEC&hl=en-US&curr= 200
-ERROR:__main__:  ❌ Ошибка прямого поиска: list index out of range
-INFO:__main__:  🔍 Пробуем обратный поиск: DXB→SVO
-INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDRFhCcgUSA1NWT0IBAUgBmAEC&hl=en-US&curr= 200
-INFO:__main__:  ✅ Обратный поиск нашёл 3 рейсов
-INFO:__main__:📊 Всего найдено 3 уникальных рейсов
-INFO:__main__:✅ Google Flights: найдено 3 рейсов
-INFO:__main__:🔍 Поиск в Aviasales...
-INFO:__main__:📡 Aviasales REST запрос: SVO→DXB 2026-08-01
+        results = search_google_flights_v2(origin, destination, date)
+        if results:
+            return results
+    
+    # Если v2 не дал результатов — используем fallback (fast-flights)
+    return search_google_flights_fallback(origin, destination, date)
+def search_google_flights_v2(origin, destination, date):
+    """
+    Поиск через google-flights-search (альтернативный метод)
+    """
+    try:
+        logger.info(f"📡 Google Flights (v2) запрос: {origin}→{destination} {date}")
+        
+        from google_flights_search import FlightSearch
+        
+        search = FlightSearch(
+            from_airport=origin,
+            to_airport=destination,
+            date=date,
+            adults=1,
+            children=0,
+            infants=0,
+            travel_class="ECONOMY"
+        )
+        
+        results = search.get_results()
+        
+        if not results:
+            logger.warning(f"⚠️ google-flights-search: рейсы не найдены для {origin}→{destination}")
+            return []
+        
+        # Парсим результаты
+        parsed = []
+        for flight in results[:30]:
+            airline = getattr(flight, 'airline', 'N/A')
+            price = getattr(flight, 'price', 0)
+            currency = getattr(flight, 'currency', 'USD')
+            price_usd = price if currency == 'USD' else round(price / 95, 2)
+            
+            segments = []
+            total_duration = 0
+            seg_list = getattr(flight, 'segments', [])
+            for seg in seg_list:
+                from_code = getattr(seg, 'origin_airport', 'N/A')
+                to_code = getattr(seg, 'destination_airport', 'N/A')
+                dep_time = getattr(seg, 'departure_time', 'N/A')
+                arr_time = getattr(seg, 'arrival_time', 'N/A')
+                duration = getattr(seg, 'duration', 0)
+                
+                segments.append({
+                    'from_code': from_code,
+                    'to_code': to_code,
+                    'departure': dep_time,
+                    'arrival': arr_time,
+                    'duration': duration,
+                    'departure_hour': int(dep_time[11:13]) if dep_time != 'N/A' else 12
+                })
+                if duration:
+                    total_duration += duration
+            
+            stops = len(segments) - 1
+            parsed.append({
+                'airline': airline,
+                'price_usd': price_usd,
+                'segments': segments,
+                'total_segments': len(segments),
+                'total_duration': total_duration,
+                'stops': stops,
+                'source': 'google-flights-v2',
+                'ticket_link': getattr(flight, 'booking_link', 'https://www.google.com/travel/flights')
+            })
+        
+        logger.info(f"✅ google-flights-search: найдено {len(parsed)} рейсов")
+        return parsed
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка google-flights-search для {origin}→{destination}: {e}")
+        return []
 
 def search_google_flights_fallback(origin, destination, date):
     """
