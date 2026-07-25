@@ -714,30 +714,141 @@ def parse_aviasales_result(data, origin, destination, date):
         logger.error(f"❌ Aviasales парсинг ошибка: {e}")
     return flights
 
-# =================================================================
-# ОСНОВНАЯ ФУНКЦИЯ ПОИСКА (ОБНОВЛЕНА)
-# =================================================================
-def search_all_flights(from_city, to_city, date):
-    all_flights = []
-    
-    # Используем улучшенный fallback (fli пока отключён)
-    logger.info(f"🔍 Поиск в Google Flights (улучшенный fast-flights)...")
-    google_results = search_google_flights_fallback(from_city, to_city, date)
-    if google_results:
-        all_flights.extend(google_results)
-        logger.info(f"✅ Google Flights: найдено {len(google_results)} рейсов")
-    
-    # Aviasales
-    logger.info(f"🔍 Поиск в Aviasales...")
-    aviasales_results = search_aviasales(from_city, to_city, date)
-    if aviasales_results:
-        all_flights.extend(aviasales_results)
-        logger.info(f"✅ Aviasales: найдено {len(aviasales_results)} рейсов")
-    
-    all_flights.sort(key=lambda x: x.get('price_usd', 9999))
-    logger.info(f"📊 Всего найдено {len(all_flights)} рейсов")
-    return all_flights
+# ===================================================================
+# НОВАЯ ОПТИМИЗИРОВАННАЯ ФУНКЦИЯ ПОИСКА
+# ===================================================================
 
+def search_all_flights(from_city, to_city, date):
+    """
+    Параллельный поиск через все источники
+    """
+    logger.info(f"🚀 Поиск: {from_city} → {to_city} на {date}")
+    
+    all_flights = []
+    results_lock = threading.Lock()
+    
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {}
+        
+        # 1️⃣ AVIASALES
+        logger.info("🔍 1️⃣ Aviasales...")
+        future_aviasales = executor.submit(search_aviasales, from_city, to_city, date)
+        futures['Aviasales'] = future_aviasales
+        
+        # 2️⃣ GOOGLE FLIGHTS v2
+        if GOOGLE_FLIGHTS_V2_AVAILABLE:
+            logger.info("🔍 2️⃣ Google v2...")
+            future_gf = executor.submit(search_google_flights_v2, from_city, to_city, date)
+            futures['Google v2'] = future_gf
+        
+        # 3️⃣ FLI
+        logger.info("🔍 3️⃣ FLI...")
+        future_fli = executor.submit(search_fli_optimized, from_city, to_city, date)
+        futures['FLI'] = future_fli
+        
+        # 4️⃣ fast-flights
+        logger.info("🔍 4️⃣ fast-flights...")
+        future_ff = executor.submit(search_google_flights_fallback, from_city, to_city, date)
+        futures['fast-flights'] = future_ff
+        
+        # Собираем результаты
+        for source_name, future in futures.items():
+            try:
+                result = future.result(timeout=20)
+                if result:
+                    with results_lock:
+                        all_flights.extend(result)
+                        logger.info(f"✅ {source_name}: {len(result)}")
+            except Exception as e:
+                logger.error(f"❌ {source_name}: {e}")
+    
+    # Очищаем дубликаты
+    unique_flights = []
+    seen = set()
+    
+    for flight in sorted(all_flights, key=lambda x: x.get('price_usd', 9999)):
+        key = (flight.get('airline', ''), round(flight.get('price_usd', 0), -1))
+        if key not in seen:
+            seen.add(key)
+            unique_flights.append(flight)
+    
+    logger.info(f"📊 ИТОГО: {len(unique_flights)} рейсов")
+    return unique_flights[:100]
+
+
+def search_fli_optimized(origin, destination, date):
+    """FLI для параллельного поиска"""
+    try:
+        from fli.models import Airport, PassengerInfo, SeatType, MaxStops, SortBy, FlightSearchFilters, FlightSegment
+        from fli.search import SearchFlights
+        
+        logger.info(f"📡 FLI: {origin}→{destination}")
+        
+        if len(origin) != 3 or len(destination) != 3:
+            return []
+        
+        try:
+            from_airport = getattr(Airport, origin.upper(), None)
+            to_airport = getattr(Airport, destination.upper(), None)
+        except:
+            return []
+        
+        if not from_airport or not to_airport:
+            return []
+        
+        filters = FlightSearchFilters(
+            passenger_info=PassengerInfo(adults=1),
+            flight_segments=[
+                FlightSegment(
+                    departure_airport=[[from_airport, 0]],
+                    arrival_airport=[[to_airport, 0]],
+                    travel_date=date,
+                )
+            ],
+            seat_type=SeatType.ECONOMY,
+            stops=MaxStops.ANY,
+            sort_by=SortBy.CHEAPEST,
+        )
+        
+        search = SearchFlights()
+        flights = search.search(filters)
+        
+        if not flights:
+            return []
+        
+        parsed = []
+        for flight in flights[:25]:
+            try:
+                price = getattr(flight, 'price', None)
+                if not price:
+                    continue
+                
+                airline = getattr(flight, 'airline', 'N/A')
+                price_usd = float(price)
+                
+                parsed.append({
+                    'airline': airline,
+                    'price_usd': price_usd,
+                    'segments': [],
+                    'total_segments': 1,
+                    'total_duration': 0,
+                    'stops': 0,
+                    'source': 'fli',
+                    'ticket_link': 'https://www.google.com/travel/flights'
+                })
+            except:
+                continue
+        
+        if parsed:
+            logger.info(f"✅ FLI: {len(parsed)}")
+        return parsed
+        
+    except ImportError:
+        logger.warning("⚠️ FLI не установлена")
+        return []
+    except Exception as e:
+        logger.error(f"❌ FLI ошибка: {e}")
+        return []
 # --- БАЗА АЭРОПОРТОВ ---
 def load_airports():
     city_to_iata = {}
