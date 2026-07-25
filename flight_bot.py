@@ -23,13 +23,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Пытаемся импортировать google-flights-search (если он установлен)
+logger.info("🔍 Начинаем загрузку google-flights-search...")
 try:
     from google_flights_search import FlightSearch
     GOOGLE_FLIGHTS_V2_AVAILABLE = True
     logger.info("✅ google-flights-search доступен")
-except ImportError:
+except ImportError as e:
     GOOGLE_FLIGHTS_V2_AVAILABLE = False
-    logger.warning("⚠️ google-flights-search НЕ установлен, используем fast-flights")
+    logger.warning(f"⚠️ google-flights-search НЕ установлен: {e}")
+logger.info(f"🔍 GOOGLE_FLIGHTS_V2_AVAILABLE = {GOOGLE_FLIGHTS_V2_AVAILABLE}")
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 USD_TO_RUB = 95.0
