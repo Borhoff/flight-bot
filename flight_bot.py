@@ -328,31 +328,33 @@ def search_google_flights_v2(origin, destination, date):
 
 def search_google_flights_fallback(origin, destination, date):
     """
-    Улучшенный поиск через fast-flights по всем аэропортам
+    Улучшенный поиск через fast-flights по всем аэропортам с максимальной настойчивостью
     """
     try:
         logger.info(f"📡 Google Flights (улучшенный fallback) запрос: {origin}→{destination} {date}")
         
-        # ВСЕ аэропорты Москвы и Дубая
+        # ВСЕ аэропорты для популярных городов
         airports_map = {
             "MOW": ["SVO", "DME", "VKO"],
             "DXB": ["DXB", "DWC", "SHJ"],
+            "IST": ["IST", "SAW"],
             "LON": ["LHR", "LGW", "STN", "LCY"],
             "NYC": ["JFK", "EWR", "LGA"],
             "PAR": ["CDG", "ORY", "BVA"],
-            "IST": ["IST", "SAW"],
             "BKK": ["BKK", "DMK"],
+            "TYO": ["NRT", "HND"],
         }
         
         from_airports = airports_map.get(origin, [origin])
         to_airports = airports_map.get(destination, [destination])
         
         all_flights = []
-        max_attempts = 3  # Увеличили до 3 попыток
+        max_attempts = 3
         
+        # 1. Поиск по всем парам аэропортов
         for from_ap in from_airports:
             for to_ap in to_airports:
-                # Пропускаем проблемные аэропорты (иногда они не работают)
+                # Пропускаем заведомо проблемные аэропорты для скорости
                 if to_ap in ["DWC", "SHJ"]:
                     continue
                     
@@ -379,47 +381,68 @@ def search_google_flights_fallback(origin, destination, date):
                             else:
                                 logger.warning(f"  ⚠️ Попытка {attempt+1}: рейсы не найдены")
                                 if attempt < max_attempts - 1:
-                                    time.sleep(2)
+                                    time.sleep(1.5)
                         except Exception as e:
                             logger.error(f"  ❌ Ошибка при попытке {attempt+1}: {e}")
                             if attempt < max_attempts - 1:
-                                time.sleep(3)
+                                time.sleep(2)
                             continue
                             
                 except Exception as e:
                     logger.error(f"  ❌ Ошибка для {from_ap}→{to_ap}: {e}")
                     continue
         
-        # ПРЯМОЙ ПОИСК ПО ГОРОДУ (добавляет больше рейсов)
-        try:
+        # 2. Прямой поиск по городу (если не нашли или мало рейсов)
+        if len(all_flights) < 5:
             logger.info(f"  🔍 Прямой поиск: {origin}→{destination}")
-            q = create_query(
-                flights=[FlightQuery(date=date, from_airport=origin, to_airport=destination)],
-                seat="economy",
-                trip="one-way",
-                passengers=Passengers(adults=1),
-                language="en-US",
-            )
-            for attempt in range(max_attempts):
-                try:
-                    result = get_flights(q)
-                    if result and len(result) > 0:
-                        logger.info(f"  ✅ Прямой поиск нашёл {len(result)} рейсов")
-                        parsed = parse_google_flights_result(result)
-                        if parsed:
-                            all_flights.extend(parsed)
-                        break
-                    else:
+            try:
+                q = create_query(
+                    flights=[FlightQuery(date=date, from_airport=origin, to_airport=destination)],
+                    seat="economy",
+                    trip="one-way",
+                    passengers=Passengers(adults=1),
+                    language="en-US",
+                )
+                for attempt in range(max_attempts):
+                    try:
+                        result = get_flights(q)
+                        if result and len(result) > 0:
+                            logger.info(f"  ✅ Прямой поиск нашёл {len(result)} рейсов")
+                            parsed = parse_google_flights_result(result)
+                            if parsed:
+                                all_flights.extend(parsed)
+                            break
+                        else:
+                            if attempt < max_attempts - 1:
+                                time.sleep(1.5)
+                    except Exception as e:
+                        logger.error(f"  ❌ Ошибка прямого поиска: {e}")
                         if attempt < max_attempts - 1:
                             time.sleep(2)
-                except Exception as e:
-                    logger.error(f"  ❌ Ошибка прямого поиска: {e}")
-                    if attempt < max_attempts - 1:
-                        time.sleep(2)
-        except Exception as e:
-            logger.error(f"  ❌ Ошибка прямого поиска: {e}")
+            except Exception as e:
+                logger.error(f"  ❌ Ошибка прямого поиска: {e}")
         
-        # Убираем дубликаты
+        # 3. Если всё ещё мало рейсов - пробуем поиск по обратному направлению (экспериментально)
+        if len(all_flights) < 3:
+            logger.info(f"  🔍 Пробуем обратный поиск: {destination}→{origin}")
+            try:
+                q = create_query(
+                    flights=[FlightQuery(date=date, from_airport=destination, to_airport=origin)],
+                    seat="economy",
+                    trip="one-way",
+                    passengers=Passengers(adults=1),
+                    language="en-US",
+                )
+                result = get_flights(q)
+                if result and len(result) > 0:
+                    logger.info(f"  ✅ Обратный поиск нашёл {len(result)} рейсов")
+                    parsed = parse_google_flights_result(result)
+                    if parsed:
+                        all_flights.extend(parsed)
+            except Exception as e:
+                logger.error(f"  ❌ Ошибка обратного поиска: {e}")
+        
+        # Убираем дубликаты (по авиакомпании, цене и времени вылета)
         unique_flights = []
         seen = set()
         for flight in sorted(all_flights, key=lambda x: x.get('price_usd', 9999)):
@@ -434,7 +457,7 @@ def search_google_flights_fallback(origin, destination, date):
                 unique_flights.append(flight)
         
         logger.info(f"📊 Всего найдено {len(unique_flights)} уникальных рейсов")
-        return unique_flights[:50]  # Увеличили до 50
+        return unique_flights[:50]  # Возвращаем до 50 рейсов
         
     except Exception as e:
         logger.error(f"❌ Критическая ошибка Google Flights fallback: {e}")
@@ -682,21 +705,14 @@ def parse_aviasales_result(data, origin, destination, date):
 def search_all_flights(from_city, to_city, date):
     all_flights = []
     
-    # 1. Пробуем fli (пока отключено)
-    # logger.info(f"🔍 Поиск через fli...")
-    # fli_results = search_fli(from_city, to_city, date)
-    # if fli_results:
-    #     all_flights.extend(fli_results)
-    #     logger.info(f"✅ fli: найдено {len(fli_results)} рейсов")
-    
-    # 2. Используем улучшенный fallback
+    # Используем улучшенный fallback (fli пока отключён)
     logger.info(f"🔍 Поиск в Google Flights (улучшенный fast-flights)...")
     google_results = search_google_flights_fallback(from_city, to_city, date)
     if google_results:
         all_flights.extend(google_results)
         logger.info(f"✅ Google Flights: найдено {len(google_results)} рейсов")
     
-    # 3. Aviasales
+    # Aviasales
     logger.info(f"🔍 Поиск в Aviasales...")
     aviasales_results = search_aviasales(from_city, to_city, date)
     if aviasales_results:
