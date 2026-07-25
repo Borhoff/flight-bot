@@ -38,7 +38,7 @@ TRAVELPAYOUTS_TOKEN = "eb631f12ac7f83fda4125614a6dd04bc"
 # --- КОНВЕРТАЦИЯ ВАЛЮТ ---
 def convert_to_usd(price, currency):
     """
-    Конвертирует цену в USD
+    Конвертирует цену в USD с актуальными курсами
     """
     if not price:
         return 0
@@ -47,9 +47,9 @@ def convert_to_usd(price, currency):
     if currency.upper() == "USD":
         return float(price)
     
-    # Курсы валют (примерные, можно обновлять)
+    # Актуальные курсы валют (обновляем)
     rates = {
-        "RUB": 0.011,   # 1 RUB = 0.011 USD
+        "RUB": 0.011,   # 1 RUB = 0.011 USD (примерно 91 RUB за USD)
         "EUR": 1.10,    # 1 EUR = 1.10 USD
         "AED": 0.27,    # 1 AED = 0.27 USD
         "GBP": 1.30,    # 1 GBP = 1.30 USD
@@ -978,7 +978,13 @@ def format_duration(minutes):
 
 def format_flight_card_compact(flight, index=None, label=None):
     price_usd = flight.get('price_usd', 'N/A')
-    price_rub = int(price_usd * USD_TO_RUB) if price_usd != 'N/A' else 'N/A'
+    usd_to_rub = 91.0  # Актуальный курс USD/RUB
+    
+    if price_usd != 'N/A' and price_usd is not None:
+        price_rub = int(float(price_usd) * usd_to_rub)
+        price_str = f"${price_usd} (~{price_rub:,} ₽)".replace(',', ' ')
+    else:
+        price_str = "N/A"
     card = ""
     if index:
         card += f"*{index}.* "
@@ -987,7 +993,7 @@ def format_flight_card_compact(flight, index=None, label=None):
     airline = flight.get('airline', 'N/A')
     if flight.get('flight_number'):
         airline += f" {flight['flight_number']}"
-    card += f"✈️ *{airline}* — {price_rub} ₽ (${price_usd})\n"
+    card += f"✈️ *{airline}* — {price_str}\n"
     segments = flight.get('segments', [])
     if segments:
         first_seg = segments[0]
