@@ -13,6 +13,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
 from dotenv import load_dotenv
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 # --- НОВЫЙ ИМПОРТ ДЛЯ FLI ---
 from fli.models import (
