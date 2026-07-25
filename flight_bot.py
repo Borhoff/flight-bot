@@ -249,8 +249,9 @@ def parse_aviasales_result(data, origin, destination, date):
                 flight_number = price_data.get('flight_number', '')
                 transfers = price_data.get('transfers', 0)
                 
-                # КОНВЕРТИРУЕМ РУБЛИ В USD
+                # ПРАВИЛЬНАЯ КОНВЕРТАЦИЯ
                 price_usd = convert_to_usd(price, "RUB")
+                logger.info(f"🔍 Aviasales: {airline} → {price} RUB = {price_usd} USD")
                 
                 dep_time = "N/A"
                 arr_time = "N/A"
@@ -282,7 +283,6 @@ def parse_aviasales_result(data, origin, destination, date):
                     'ticket_link': f"https://www.aviasales.com/search/{origin}{destination}{date.replace('-', '')}1",
                     'source': 'aviasales'
                 })
-                logger.info(f"✈️ Aviasales: найден рейс {airline} {flight_number} за {price} RUB ({price_usd} USD)")
     except Exception as e:
         logger.error(f"❌ Aviasales парсинг ошибка: {e}")
     return flights
