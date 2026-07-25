@@ -263,68 +263,30 @@ def search_google_flights(origin, destination, date):
     else:
         return search_google_flights_fallback(origin, destination, date)
 
-def search_google_flights_v2(origin, destination, date):
-    """Поиск через google-flights-search (полная выдача)"""
-    try:
-        logger.info(f"📡 Google Flights (v2) запрос: {origin}→{destination} {date}")
-        
-        airports_map = {
-            "MOW": ["SVO", "DME", "VKO"],
-            "DXB": ["DXB", "DWC", "SHJ"],
-        }
-        
-        from_airports = airports_map.get(origin, [origin])
-        to_airports = airports_map.get(destination, [destination])
-        
-        all_flights = []
-        
-        for from_ap in from_airports:
-            for to_ap in to_airports:
-                try:
-                    logger.info(f"  🔍 Поиск: {from_ap}→{to_ap}")
-                    
-                    search = FlightSearch(
-                        from_airport=from_ap,
-                        to_airport=to_ap,
-                        date=date,
-                        adults=1,
-                        children=0,
-                        infants=0,
-                        travel_class="ECONOMY"
-                    )
-                    
-                    results = search.get_results()
-                    
-                    if results and len(results) > 0:
-                        logger.info(f"  ✅ Найдено {len(results)} рейсов для {from_ap}→{to_ap}")
-                        parsed = parse_google_flights_v2(results)
-                        all_flights.extend(parsed)
-                    else:
-                        logger.warning(f"  ⚠️ Рейсы не найдены для {from_ap}→{to_ap}")
-                        
-                except Exception as e:
-                    logger.error(f"  ❌ Ошибка для {from_ap}→{to_ap}: {e}")
-                    continue
-        
-        unique_flights = []
-        seen = set()
-        for flight in sorted(all_flights, key=lambda x: x.get('price_usd', 9999)):
-            segments = flight.get('segments', [{}])
-            key = (
-                flight.get('airline', ''),
-                flight.get('price_usd', 0),
-                segments[0].get('departure', '') if segments else ''
-            )
-            if key not in seen:
-                seen.add(key)
-                unique_flights.append(flight)
-        
-        logger.info(f"📊 Всего найдено {len(unique_flights)} уникальных рейсов")
-        return unique_flights[:30]
-        
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка Google Flights v2: {e}")
-        return []
+
+INFO:__main__:🔍 Поиск в Google Flights (улучшенный fast-flights)...
+INFO:__main__:📡 Google Flights (улучшенный fallback) запрос: SVO→DXB 2026-08-01
+INFO:__main__:  🔍 Поиск: SVO→DXB
+INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDU1ZPcgUSA0RYQkIBAUgBmAEC&hl=en-US&curr= 200
+ERROR:__main__:  ❌ Ошибка при попытке 1: list index out of range
+INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDU1ZPcgUSA0RYQkIBAUgBmAEC&hl=en-US&curr= 200
+ERROR:__main__:  ❌ Ошибка при попытке 2: no flights found; received error
+INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDU1ZPcgUSA0RYQkIBAUgBmAEC&hl=en-US&curr= 200
+ERROR:__main__:  ❌ Ошибка при попытке 3: list index out of range
+INFO:__main__:  🔍 Прямой поиск: SVO→DXB
+INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDU1ZPcgUSA0RYQkIBAUgBmAEC&hl=en-US&curr= 200
+ERROR:__main__:  ❌ Ошибка прямого поиска: list index out of range
+INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDU1ZPcgUSA0RYQkIBAUgBmAEC&hl=en-US&curr= 200
+ERROR:__main__:  ❌ Ошибка прямого поиска: list index out of range
+INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDU1ZPcgUSA0RYQkIBAUgBmAEC&hl=en-US&curr= 200
+ERROR:__main__:  ❌ Ошибка прямого поиска: list index out of range
+INFO:__main__:  🔍 Пробуем обратный поиск: DXB→SVO
+INFO:primp:response: https://www.google.com/travel/flights?tfs=GhoSCjIwMjYtMDgtMDFqBRIDRFhCcgUSA1NWT0IBAUgBmAEC&hl=en-US&curr= 200
+INFO:__main__:  ✅ Обратный поиск нашёл 3 рейсов
+INFO:__main__:📊 Всего найдено 3 уникальных рейсов
+INFO:__main__:✅ Google Flights: найдено 3 рейсов
+INFO:__main__:🔍 Поиск в Aviasales...
+INFO:__main__:📡 Aviasales REST запрос: SVO→DXB 2026-08-01
 
 def search_google_flights_fallback(origin, destination, date):
     """
