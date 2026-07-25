@@ -438,8 +438,8 @@ def search_fli_optimized(origin, destination, date):
             passenger_info=PassengerInfo(adults=1),
             flight_segments=[
                 FlightSegment(
-                    departure_airport=[[from_airport, 0]],  # <-- ИСПРАВЛЕНО
-                    arrival_airport=[[to_airport, 0]],      # <-- ИСПРАВЛЕНО
+                    departure_airport=[[from_airport, 0]],
+                    arrival_airport=[[to_airport, 0]],
                     travel_date=date,
                 )
             ],
@@ -455,7 +455,59 @@ def search_fli_optimized(origin, destination, date):
             logger.warning(f"⚠️ FLI: рейсы не найдены для {origin}→{destination}")
             return []
         
-        # ... остальной код парсинга (без изменений) ...
+        # Парсим результаты
+        parsed = []
+        for flight in flights[:25]:
+            try:
+                price = getattr(flight, 'price', None)
+                if not price:
+                    continue
+                
+                airline = getattr(flight, 'airline', 'N/A')
+                price_usd = float(price)
+                
+                # Пытаемся получить сегменты
+                segments = []
+                total_duration = 0
+                try:
+                    for leg in flight.legs:
+                        dep_time = leg.departure_datetime.strftime("%Y-%m-%d %H:%M")
+                        arr_time = leg.arrival_datetime.strftime("%Y-%m-%d %H:%M")
+                        segments.append({
+                            'from_code': leg.departure_airport.value,
+                            'to_code': leg.arrival_airport.value,
+                            'departure': dep_time,
+                            'arrival': arr_time,
+                            'duration': 0,
+                            'departure_hour': leg.departure_datetime.hour
+                        })
+                        total_duration += int((leg.arrival_datetime - leg.departure_datetime).total_seconds() // 60)
+                except:
+                    pass
+                
+                parsed.append({
+                    'airline': airline,
+                    'price_usd': price_usd,
+                    'segments': segments,
+                    'total_segments': len(segments) if segments else 1,
+                    'total_duration': total_duration,
+                    'stops': len(segments) - 1 if segments else 0,
+                    'source': 'fli',
+                    'ticket_link': 'https://www.google.com/travel/flights'
+                })
+            except:
+                continue
+        
+        if parsed:
+            logger.info(f"✅ FLI: {len(parsed)}")
+        return parsed
+        
+    except ImportError:
+        logger.warning("⚠️ FLI не установлена")
+        return []
+    except Exception as e:
+        logger.error(f"❌ FLI ошибка: {e}")
+        return []
 
 # --- FAST-FLIGHTS (FALLBACK) ---
 def search_google_flights_fallback(origin, destination, date):
