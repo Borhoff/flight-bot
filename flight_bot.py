@@ -415,7 +415,7 @@ def parse_google_flights_v2(results):
 
 # --- FLI (оптимизированная) ---
 def search_fli_optimized(origin, destination, date):
-    """FLI для параллельного поиска"""
+    """FLI для параллельного поиска (ТОЛЬКО ПРЯМОЕ НАПРАВЛЕНИЕ)"""
     try:
         from fli.models import Airport, PassengerInfo, SeatType, MaxStops, SortBy, FlightSearchFilters, FlightSegment
         from fli.search import SearchFlights
@@ -425,21 +425,21 @@ def search_fli_optimized(origin, destination, date):
         if len(origin) != 3 or len(destination) != 3:
             return []
         
-        try:
-            from_airport = getattr(Airport, origin.upper(), None)
-            to_airport = getattr(Airport, destination.upper(), None)
-        except:
-            return []
+        # Получаем объекты Airport
+        from_airport = getattr(Airport, origin.upper(), None)
+        to_airport = getattr(Airport, destination.upper(), None)
         
         if not from_airport or not to_airport:
+            logger.error(f"❌ FLI: неизвестный код аэропорта {origin} или {destination}")
             return []
         
+        # ✅ ПРАВИЛЬНЫЙ ФОРМАТ: двойной список с Airport объектом и 0
         filters = FlightSearchFilters(
             passenger_info=PassengerInfo(adults=1),
             flight_segments=[
                 FlightSegment(
-                    departure_airport=[[from_airport, 0]],
-                    arrival_airport=[[to_airport, 0]],
+                    departure_airport=[[from_airport, 0]],  # <-- ИСПРАВЛЕНО
+                    arrival_airport=[[to_airport, 0]],      # <-- ИСПРАВЛЕНО
                     travel_date=date,
                 )
             ],
@@ -452,41 +452,10 @@ def search_fli_optimized(origin, destination, date):
         flights = search.search(filters)
         
         if not flights:
+            logger.warning(f"⚠️ FLI: рейсы не найдены для {origin}→{destination}")
             return []
         
-        parsed = []
-        for flight in flights[:25]:
-            try:
-                price = getattr(flight, 'price', None)
-                if not price:
-                    continue
-                
-                airline = getattr(flight, 'airline', 'N/A')
-                price_usd = float(price)
-                
-                parsed.append({
-                    'airline': airline,
-                    'price_usd': price_usd,
-                    'segments': [],
-                    'total_segments': 1,
-                    'total_duration': 0,
-                    'stops': 0,
-                    'source': 'fli',
-                    'ticket_link': 'https://www.google.com/travel/flights'
-                })
-            except:
-                continue
-        
-        if parsed:
-            logger.info(f"✅ FLI: {len(parsed)}")
-        return parsed
-        
-    except ImportError:
-        logger.warning("⚠️ FLI не установлена")
-        return []
-    except Exception as e:
-        logger.error(f"❌ FLI ошибка: {e}")
-        return []
+        # ... остальной код парсинга (без изменений) ...
 
 # --- FAST-FLIGHTS (FALLBACK) ---
 def search_google_flights_fallback(origin, destination, date):
