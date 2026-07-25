@@ -422,85 +422,99 @@ def search_fli_optimized(origin, destination, date):
         
         logger.info(f"📡 FLI: {origin}→{destination}")
         
-        if len(origin) != 3 or len(destination) != 3:
-            return []
+        # Если это код города (MOW, DXB, LON) — расширяем до аэропортов
+        airports_map = {
+            "MOW": ["SVO", "DME", "VKO"],
+            "DXB": ["DXB", "DWC", "SHJ"],
+            "LON": ["LHR", "LGW", "STN", "LCY"],
+            "NYC": ["JFK", "EWR", "LGA"],
+            "PAR": ["CDG", "ORY", "BVA"],
+            "IST": ["IST", "SAW"],
+            "BKK": ["BKK", "DMK"],
+        }
         
-        # Получаем объекты Airport
-        from_airport = getattr(Airport, origin.upper(), None)
-        to_airport = getattr(Airport, destination.upper(), None)
+        from_airports = airports_map.get(origin, [origin])
+        to_airports = airports_map.get(destination, [destination])
         
-        if not from_airport or not to_airport:
-            logger.error(f"❌ FLI: неизвестный код аэропорта {origin} или {destination}")
-            return []
+        all_flights = []
         
-        # ✅ ПРАВИЛЬНЫЙ ФОРМАТ: двойной список с Airport объектом и 0
-        filters = FlightSearchFilters(
-            passenger_info=PassengerInfo(adults=1),
-            flight_segments=[
-                FlightSegment(
-                    departure_airport=[[from_airport, 0]],
-                    arrival_airport=[[to_airport, 0]],
-                    travel_date=date,
-                )
-            ],
-            seat_type=SeatType.ECONOMY,
-            stops=MaxStops.ANY,
-            sort_by=SortBy.CHEAPEST,
-        )
-        
-        search = SearchFlights()
-        flights = search.search(filters)
-        
-        if not flights:
-            logger.warning(f"⚠️ FLI: рейсы не найдены для {origin}→{destination}")
-            return []
-        
-        # Парсим результаты
-        parsed = []
-        for flight in flights[:25]:
-            try:
-                price = getattr(flight, 'price', None)
-                if not price:
+        for from_ap in from_airports:
+            for to_ap in to_airports:
+                if len(from_ap) != 3 or len(to_ap) != 3:
                     continue
                 
-                airline = getattr(flight, 'airline', 'N/A')
-                price_usd = float(price)
-                
-                # Пытаемся получить сегменты
-                segments = []
-                total_duration = 0
                 try:
-                    for leg in flight.legs:
-                        dep_time = leg.departure_datetime.strftime("%Y-%m-%d %H:%M")
-                        arr_time = leg.arrival_datetime.strftime("%Y-%m-%d %H:%M")
-                        segments.append({
-                            'from_code': leg.departure_airport.value,
-                            'to_code': leg.arrival_airport.value,
-                            'departure': dep_time,
-                            'arrival': arr_time,
-                            'duration': 0,
-                            'departure_hour': leg.departure_datetime.hour
-                        })
-                        total_duration += int((leg.arrival_datetime - leg.departure_datetime).total_seconds() // 60)
-                except:
-                    pass
-                
-                parsed.append({
-                    'airline': airline,
-                    'price_usd': price_usd,
-                    'segments': segments,
-                    'total_segments': len(segments) if segments else 1,
-                    'total_duration': total_duration,
-                    'stops': len(segments) - 1 if segments else 0,
-                    'source': 'fli',
-                    'ticket_link': 'https://www.google.com/travel/flights'
-                })
-            except:
-                continue
+                    from_airport = getattr(Airport, from_ap.upper(), None)
+                    to_airport = getattr(Airport, to_ap.upper(), None)
+                    
+                    if not from_airport or not to_airport:
+                        logger.warning(f"  ⚠️ FLI: неизвестный код {from_ap} или {to_ap}")
+                        continue
+                    
+                    filters = FlightSearchFilters(
+                        passenger_info=PassengerInfo(adults=1),
+                        flight_segments=[
+                            FlightSegment(
+                                departure_airport=[[from_airport, 0]],
+                                arrival_airport=[[to_airport, 0]],
+                                travel_date=date,
+                            )
+                        ],
+                        seat_type=SeatType.ECONOMY,
+                        stops=MaxStops.ANY,
+                        sort_by=SortBy.CHEAPEST,
+                    )
+                    
+                    search = SearchFlights()
+                    flights = search.search(filters)
+                    
+                    if flights:
+                        for flight in flights[:25]:
+                            try:
+                                price = getattr(flight, 'price', None)
+                                if not price:
+                                    continue
+                                
+                                airline = getattr(flight, 'airline', 'N/A')
+                                price_usd = float(price)
+                                
+                                segments = []
+                                total_duration = 0
+                                try:
+                                    for leg in flight.legs:
+                                        dep_time = leg.departure_datetime.strftime("%Y-%m-%d %H:%M")
+                                        arr_time = leg.arrival_datetime.strftime("%Y-%m-%d %H:%M")
+                                        segments.append({
+                                            'from_code': leg.departure_airport.value,
+                                            'to_code': leg.arrival_airport.value,
+                                            'departure': dep_time,
+                                            'arrival': arr_time,
+                                            'duration': 0,
+                                            'departure_hour': leg.departure_datetime.hour
+                                        })
+                                        total_duration += int((leg.arrival_datetime - leg.departure_datetime).total_seconds() // 60)
+                                except:
+                                    pass
+                                
+                                all_flights.append({
+                                    'airline': airline,
+                                    'price_usd': price_usd,
+                                    'segments': segments,
+                                    'total_segments': len(segments) if segments else 1,
+                                    'total_duration': total_duration,
+                                    'stops': len(segments) - 1 if segments else 0,
+                                    'source': 'fli',
+                                    'ticket_link': 'https://www.google.com/travel/flights'
+                                })
+                            except:
+                                continue
+                except Exception as e:
+                    logger.error(f"  ❌ FLI ошибка для {from_ap}→{to_ap}: {e}")
+                    continue
         
-        if parsed:
-            logger.info(f"✅ FLI: {len(parsed)}")
-        return parsed
+        if all_flights:
+            logger.info(f"✅ FLI: {len(all_flights)}")
+        return all_flights
         
     except ImportError:
         logger.warning("⚠️ FLI не установлена")
@@ -508,7 +522,6 @@ def search_fli_optimized(origin, destination, date):
     except Exception as e:
         logger.error(f"❌ FLI ошибка: {e}")
         return []
-
 # --- FAST-FLIGHTS (FALLBACK) ---
 def search_google_flights_fallback(origin, destination, date):
     """
