@@ -291,14 +291,9 @@ def generate_aviasales_link(origin_code, destination_code, date, adults=1):
     except:
         date_str = "0101"
     return f"https://www.aviasales.ru/search/{origin_code}{date_str}{destination_code}{adults}"
-def generate_google_flights_link(origin_code, destination_code, date):
-    """
-    Генерирует ссылку на Google Flights с заполненными параметрами.
-    Использует IATA-коды (например, MOW, DXB).
-    """
+def generate_google_flights_link(origin, destination, date):
     base_url = "https://www.google.com/travel/flights/search"
-    # Используем коды, а не названия
-    query = f"{origin_code} {destination_code} {date}"
+    query = f"{origin} {destination} {date}"
     query_encoded = query.replace(" ", "+")
     return f"{base_url}?q={query_encoded}"
 
