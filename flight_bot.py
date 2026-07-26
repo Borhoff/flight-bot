@@ -18,6 +18,9 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 # Загружаем переменные окружения
 load_dotenv()
 
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TRAVELPAYOUTS_TOKEN = "eb631f12ac7f83fda4125614a6dd04bc"   # Добавлено
+
 # Настраиваем логгер
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -238,9 +241,6 @@ AIRLINE_NAMES = {
     "ZH": "Shenzhen Airlines",
     "MF": "Xiamen Airlines",
 }
-
-# --- ДОБАВЬТЕ ЭТУ СТРОКУ ЗДЕСЬ ---
-TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
 # --- КОНВЕРТАЦИЯ ВАЛЮТ ---
 def convert_to_usd(price, currency):
