@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 # Загружаем переменные окружения
 load_dotenv()
 
+
 # --- МАППИНГ КОДОВ АВИАКОМПАНИЙ В ПОЛНЫЕ НАЗВАНИЯ ---
 AIRLINE_NAMES = {
     "FZ": "flydubai",
@@ -236,6 +237,20 @@ AIRLINE_NAMES = {
     "ZH": "Shenzhen Airlines",
     "MF": "Xiamen Airlines",
 }
+
+def generate_aviasales_link(origin, destination, date, adults=1):
+    """
+    Генерирует ссылку на Aviasales с заполненными параметрами поиска
+    """
+    base_url = "https://www.aviasales.com/search"
+    params = {
+        "origin": origin,
+        "destination": destination,
+        "departure_date": date,
+        "adults": adults,
+    }
+    query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+    return f"{base_url}?{query_string}"
 
 # Настраиваем логгер
 logging.basicConfig(level=logging.INFO)
@@ -1638,7 +1653,11 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
         if fastest and fastest != best and fastest != cheapest:
             response += f"⚡ *Самый быстрый:*\n{format_flight_card_compact(fastest, label='⚡')}\n\n"
         
-        response += "🔗 *Ссылки на покупку:*\n"
+                response += "🔗 *Где купить:*\n"
+        # Ссылка на Aviasales с заполненными параметрами (всегда доступна)
+        aviasales_link = generate_aviasales_link(from_city, to_city, date)
+        response += f"   [Купить на Aviasales]({aviasales_link})\n"
+        # Дополнительные прямые ссылки, если они есть у рейсов
         if best and best.get('ticket_link'):
             response += f"   [Купить лучший вариант]({best['ticket_link']})\n"
         if cheapest and cheapest.get('ticket_link') and cheapest != best:
