@@ -1,3 +1,4 @@
+
 import os
 import logging
 import re
@@ -19,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 load_dotenv()
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TRAVELPAYOUTS_TOKEN = "eb631f12ac7f83fda4125614a6dd04bc"   # Добавлено
+TRAVELPAYOUTS_TOKEN = "eb631f12ac7f83fda4125614a6dd04bc"
 
 # Настраиваем логгер
 logging.basicConfig(level=logging.INFO)
@@ -271,6 +272,198 @@ def generate_aviasales_link(origin, destination, date, adults=1):
     }
     query_string = "&".join([f"{k}={v}" for k, v in params.items()])
     return f"{base_url}?{query_string}"
+
+# --- БАЗА АЭРОПОРТОВ И КОНВЕРТЕРЫ ---
+def load_airports():
+    city_to_iata = {}
+    airport_names = {}
+    try:
+        with open('airports.dat', 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                airport_name = row[1].strip()
+                city = row[2].strip().lower()
+                iata = row[4].strip()
+                if city and iata:
+                    if city not in city_to_iata:
+                        city_to_iata[city] = []
+                    city_to_iata[city].append(iata)
+                    airport_names[iata] = airport_name
+        logger.info(f"✅ Загружено {len(city_to_iata)} городов с аэропортами")
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки базы аэропортов: {e}")
+        city_to_iata, airport_names = get_fallback_data()
+    return city_to_iata, airport_names
+
+def get_fallback_data():
+    city_to_iata = {
+        "москва": ["SVO", "DME", "VKO"],
+        "moscow": ["SVO", "DME", "VKO"],
+        "дубай": ["DXB"],
+        "dubai": ["DXB"],
+        "лондон": ["LHR", "LGW", "STN"],
+        "london": ["LHR", "LGW", "STN"],
+        "нью-йорк": ["JFK", "EWR", "LGA"],
+        "new york": ["JFK", "EWR", "LGA"],
+        "париж": ["CDG", "ORY"],
+        "paris": ["CDG", "ORY"],
+        "стамбул": ["IST"],
+        "istanbul": ["IST"],
+        "пекин": ["PEK"],
+        "beijing": ["PEK"],
+        "шанхай": ["PVG"],
+        "shanghai": ["PVG"],
+        "бангкок": ["BKK"],
+        "bangkok": ["BKK"],
+        "анталья": ["AYT"],
+        "antalya": ["AYT"],
+        "ереван": ["EVN"],
+        "yerevan": ["EVN"],
+        "астана": ["NQZ"],
+        "astana": ["NQZ"],
+        "ташкент": ["TAS"],
+        "tashkent": ["TAS"],
+        "баку": ["GYD"],
+        "baku": ["GYD"],
+        "тбилиси": ["TBS"],
+        "tbilisi": ["TBS"],
+        "сочи": ["AER"],
+        "sochi": ["AER"],
+        "калининград": ["KGD"],
+        "kaliningrad": ["KGD"],
+        "санкт-петербург": ["LED"],
+        "saint petersburg": ["LED"],
+    }
+    airport_names = {
+        "SVO": "Шереметьево",
+        "DME": "Домодедово",
+        "VKO": "Внуково",
+        "DXB": "Дубай",
+        "LHR": "Хитроу",
+        "JFK": "Кеннеди",
+        "IST": "Стамбул",
+        "PEK": "Пекин",
+        "PVG": "Шанхай Пудун",
+        "BKK": "Бангкок",
+        "AYT": "Анталья",
+        "EVN": "Ереван",
+        "NQZ": "Астана",
+        "TAS": "Ташкент",
+        "GYD": "Баку",
+        "TBS": "Тбилиси",
+        "AER": "Сочи",
+        "KGD": "Калининград",
+        "LED": "Санкт-Петербург",
+    }
+    return city_to_iata, airport_names
+
+CITY_TO_IATA, AIRPORT_NAMES = load_airports()
+
+CITY_NAME_CONVERTER = {
+    "москва": "moscow",
+    "moscow": "moscow",
+    "лондон": "london",
+    "london": "london",
+    "париж": "paris",
+    "paris": "paris",
+    "стамбул": "istanbul",
+    "istanbul": "istanbul",
+    "дубай": "dubai",
+    "dubai": "dubai",
+    "пекин": "beijing",
+    "beijing": "beijing",
+    "шанхай": "shanghai",
+    "shanghai": "shanghai",
+    "бангкок": "bangkok",
+    "bangkok": "bangkok",
+    "анья": "antalya",
+    "antalya": "antalya",
+    "ереван": "yerevan",
+    "yerevan": "yerevan",
+    "астана": "astana",
+    "astana": "astana",
+    "ташкент": "tashkent",
+    "tashkent": "tashkent",
+    "баку": "baku",
+    "baku": "baku",
+    "тбилиси": "tbilisi",
+    "tbilisi": "tbilisi",
+    "сочи": "sochi",
+    "sochi": "sochi",
+    "калининград": "kaliningrad",
+    "kaliningrad": "kaliningrad",
+    "санкт-петербург": "saint petersburg",
+    "saint petersburg": "saint petersburg",
+    "спб": "saint petersburg",
+}
+
+def normalize_city_name(city_name):
+    if not city_name:
+        return city_name
+    city_lower = city_name.strip().lower()
+    if len(city_lower) == 3 and city_name.isupper():
+        return city_lower
+    if city_lower in CITY_NAME_CONVERTER:
+        return CITY_NAME_CONVERTER[city_lower]
+    return city_lower
+
+def find_city_code(city_name):
+    if not city_name:
+        return []
+    normalized = normalize_city_name(city_name)
+    city_lower = normalized.lower().strip()
+    popular_cities = {
+        "москва": ["SVO", "DME", "VKO"],
+        "moscow": ["SVO", "DME", "VKO"],
+        "дубай": ["DXB"],
+        "dubai": ["DXB"],
+        "лондон": ["LHR", "LGW", "STN"],
+        "london": ["LHR", "LGW", "STN"],
+        "нью-йорк": ["JFK", "EWR", "LGA"],
+        "new york": ["JFK", "EWR", "LGA"],
+        "париж": ["CDG", "ORY"],
+        "paris": ["CDG", "ORY"],
+        "стамбул": ["IST"],
+        "istanbul": ["IST"],
+        "пекин": ["PEK"],
+        "beijing": ["PEK"],
+        "шанхай": ["PVG"],
+        "shanghai": ["PVG"],
+        "бангкок": ["BKK"],
+        "bangkok": ["BKK"],
+        "анталья": ["AYT"],
+        "antalya": ["AYT"],
+        "ереван": ["EVN"],
+        "yerevan": ["EVN"],
+        "астана": ["NQZ"],
+        "astana": ["NQZ"],
+        "ташкент": ["TAS"],
+        "tashkent": ["TAS"],
+        "баку": ["GYD"],
+        "baku": ["GYD"],
+        "тбилиси": ["TBS"],
+        "tbilisi": ["TBS"],
+        "сочи": ["AER"],
+        "sochi": ["AER"],
+        "калининград": ["KGD"],
+        "kaliningrad": ["KGD"],
+        "санкт-петербург": ["LED"],
+        "saint petersburg": ["LED"],
+    }
+    if city_lower in popular_cities:
+        return popular_cities[city_lower]
+    if len(city_lower) == 3 and city_name.isupper():
+        return [city_lower.upper()]
+    if city_lower in CITY_TO_IATA:
+        return CITY_TO_IATA[city_lower]
+    results = []
+    for city, codes in CITY_TO_IATA.items():
+        if city_lower in city or city in city_lower:
+            results.extend(codes)
+    return list(set(results))
+
+def get_airport_name(iata_code):
+    return AIRPORT_NAMES.get(iata_code, iata_code)
 
 # --- AVIASALES DATA API ---
 def search_aviasales_data_api(origin, destination, date):
@@ -876,9 +1069,9 @@ def get_city_keyboard(user_id=None, selected_city=None, direction="from"):
         ("Санкт-Петербург", "LED"),
     ]
     if selected_city:
-        for name, code in city_items:
+        for i, (name, code) in enumerate(city_items):
             if code == selected_city:
-                city_items.remove((name, code))
+                city_items.pop(i)
                 city_items.insert(0, (f"✅ {name}", code))
                 break
     for i, (name, code) in enumerate(city_items):
@@ -1110,13 +1303,12 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
         if fastest and fastest != best and fastest != cheapest:
             response += f"⚡ *Самый быстрый:*\n{format_flight_card_compact(fastest, label='⚡')}\n\n"
         response += "🔗 *Где купить:*\n"
-       # Генерируем ссылку на Aviasales с IATA-кодами
+        # Генерируем ссылку на Aviasales с IATA-кодами
         if from_codes and to_codes:
-    aviasales_link = generate_aviasales_link(from_codes[0], to_codes[0], date)
+            aviasales_link = generate_aviasales_link(from_codes[0], to_codes[0], date)
         else:
-    # fallback на случай, если кодов нет
-    aviasales_link = generate_aviasales_link(from_city, to_city, date)
-    response += f"   [Купить на Aviasales]({aviasales_link})\n"
+            aviasales_link = generate_aviasales_link(from_city, to_city, date)
+        response += f"   [Купить на Aviasales]({aviasales_link})\n"
         if best and best.get('ticket_link'):
             response += f"   [Купить лучший вариант]({best['ticket_link']})\n"
         if cheapest and cheapest.get('ticket_link') and cheapest != best:
@@ -1142,7 +1334,6 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
         else:
             await update.message.reply_text(error_msg, parse_mode="Markdown")
 
-# --- ДРУГИЕ ОБРАБОТЧИКИ ---
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_data = context.user_data
@@ -1306,10 +1497,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_data = context.user_data
     user_id = update.effective_user.id
-
     logger.info(f"🔘 Callback: {data} от user {user_id}")
-
-    # ----- НАСТРОЙКИ (приоритет, пересадки, время) -----
     if data == "settings_priority":
         await query.edit_message_text(
             "🎯 *Выберите приоритет поиска:*\n\n"
@@ -1323,7 +1511,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_priority_keyboard()
         )
         return
-
     if data == "search_by_city":
         user_data['state'] = 'search_by_city'
         if not user_data.get('from_city_codes'):
@@ -1339,7 +1526,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
         return
-
     elif data == "settings_favorite_city":
         await query.edit_message_text(
             "⭐ *Выберите избранный город вылета*\n\nВыберите из списка или нажмите «Ввести город вручную»:",
@@ -1347,7 +1533,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_favorite_city_keyboard()
         )
         return
-
     elif data == "fav_city_manual":
         user_data['state'] = 'fav_city_manual'
         await query.edit_message_text(
@@ -1355,7 +1540,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         return
-
     elif data == "settings_favorite_airport":
         await query.edit_message_text(
             "🛫 *Избранный аэропорт*\n\nРейсы из этого аэропорта будут показываться **первыми** в результатах поиска.\n\nЭто НЕ ограничивает поиск — бот всё равно ищет рейсы из всех аэропортов города,\nно рейсы из избранного аэропорта будут вверху списка.",
@@ -1363,7 +1547,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_favorite_airport_keyboard(user_id)
         )
         return
-
     elif data.startswith("fav_city_"):
         code = data.replace("fav_city_", "")
         if code == "none":
@@ -1384,7 +1567,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"✅ Избранный город: *{fav_name if fav_name else code}* ({code})", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
-
     elif data.startswith("fav_airport_"):
         code = data.replace("fav_airport_", "")
         if code == "none":
@@ -1399,7 +1581,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"✅ Избранный аэропорт: *{get_airport_name(code)} ({code})*", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
-
     elif data == "settings_stops":
         await query.edit_message_text(
             "🔄 *Максимум пересадок:*\n\nВыберите допустимое количество пересадок:",
@@ -1407,7 +1588,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_stops_keyboard()
         )
         return
-
     elif data == "settings_hours":
         await query.edit_message_text(
             "⏰ *Удобное время вылета:*\n\nВыберите предпочтительное время:",
@@ -1415,7 +1595,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_hours_keyboard()
         )
         return
-
     elif data == "settings_back":
         prefs = get_user_preferences(user_id)
         priority = prefs.get('priority', 'balance')
@@ -1445,7 +1624,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_settings_keyboard(user_id)
         )
         return
-
     elif data.startswith("priority_"):
         priority = data.replace("priority_", "")
         prefs = get_user_preferences(user_id)
@@ -1455,7 +1633,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"✅ Приоритет изменен на: *{priority_names.get(priority, priority)}*\n\n⚙️ Настройки обновлены!", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
-
     elif data.startswith("stops_"):
         stops = int(data.replace("stops_", ""))
         prefs = get_user_preferences(user_id)
@@ -1465,7 +1642,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"✅ Максимум пересадок: *{stops_names.get(stops, 'Любые')}*\n\n⚙️ Настройки обновлены!", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
-
     elif data.startswith("hours_"):
         hours = data.replace("hours_", "")
         prefs = get_user_preferences(user_id)
@@ -1475,7 +1651,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"✅ Время вылета: *{hours_names.get(hours, 'Любое')}*\n\n⚙️ Настройки обновлены!", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
-
     elif data == "reset_settings":
         save_user_preferences(user_id, {'priority': 'balance', 'max_stops': 3, 'preferred_hours': 'all', 'favorite_city': '', 'favorite_airport': '', 'avoid_airports': ''})
         await query.edit_message_text(
@@ -1484,12 +1659,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
-
     elif data == "back_to_main":
         await query.edit_message_text("✈️ *Главное меню*", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
-
     elif data == "manual_date":
         user_data['state'] = 'manual_date'
         await query.edit_message_text(
@@ -1497,7 +1670,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         return
-
     elif data == "popular_routes":
         await query.edit_message_text(
             "✈️ *Популярные маршруты*\n\nВыберите маршрут для быстрого поиска:",
@@ -1505,17 +1677,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_popular_routes(user_id)
         )
         return
-
     elif data == "history_empty":
         await query.edit_message_text("📭 История пока пуста. Сделайте свой первый поиск!")
         return
-
     elif data == "history_clear":
         delete_search_history(user_id)
         await query.edit_message_text("🗑️ История успешно очищена!")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
-
     elif data.startswith("history_"):
         parts = data.split("_")
         if len(parts) >= 5:
@@ -1532,7 +1701,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"🔍 Повторяем поиск: {from_city} → {to_city} на {date}")
             await perform_search(update, context, is_callback=True)
         return
-
     elif data.startswith("route_"):
         _, from_city, to_city = data.split("_")
         user_data['from_city_codes'] = [from_city]
@@ -1552,13 +1720,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_date_keyboard()
         )
         return
-
-    # ----- ВЫБОР ГОРОДА (ИСПРАВЛЕННАЯ ЛОГИКА) -----
     elif data.startswith("city_"):
         parts = data.split("_")
         code = parts[1]
         direction = parts[2] if len(parts) > 2 else "from"
-
         if direction == "from":
             user_data['from_city_codes'] = [code]
             city_name = code
@@ -1595,16 +1760,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_date_keyboard()
             )
         return
-
-    # ----- ВЫБОР ДАТЫ -----
     elif data.startswith("date_"):
         date = data.replace("date_", "")
         user_data['date'] = date
         await query.edit_message_text(f"✅ Выбрана дата: *{date}*", parse_mode="Markdown")
         await perform_search(update, context, is_callback=True)
         return
-
-    # Если ничего не подошло — игнорируем
     else:
         logger.warning(f"⚠️ Неизвестный callback: {data}")
         await query.edit_message_text("❌ Неизвестная команда. Попробуйте снова.")
