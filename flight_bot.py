@@ -1110,8 +1110,13 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
         if fastest and fastest != best and fastest != cheapest:
             response += f"⚡ *Самый быстрый:*\n{format_flight_card_compact(fastest, label='⚡')}\n\n"
         response += "🔗 *Где купить:*\n"
-        aviasales_link = generate_aviasales_link(from_city, to_city, date)
-        response += f"   [Купить на Aviasales]({aviasales_link})\n"
+       # Генерируем ссылку на Aviasales с IATA-кодами
+        if from_codes and to_codes:
+    aviasales_link = generate_aviasales_link(from_codes[0], to_codes[0], date)
+        else:
+    # fallback на случай, если кодов нет
+    aviasales_link = generate_aviasales_link(from_city, to_city, date)
+    response += f"   [Купить на Aviasales]({aviasales_link})\n"
         if best and best.get('ticket_link'):
             response += f"   [Купить лучший вариант]({best['ticket_link']})\n"
         if cheapest and cheapest.get('ticket_link') and cheapest != best:
