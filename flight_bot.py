@@ -1652,8 +1652,8 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
         
         if fastest and fastest != best and fastest != cheapest:
             response += f"⚡ *Самый быстрый:*\n{format_flight_card_compact(fastest, label='⚡')}\n\n"
-        
-                response += "🔗 *Где купить:*\n"
+            
+        response += "🔗 *Где купить:*\n"
         # Ссылка на Aviasales с заполненными параметрами (всегда доступна)
         aviasales_link = generate_aviasales_link(from_city, to_city, date)
         response += f"   [Купить на Aviasales]({aviasales_link})\n"
@@ -1663,7 +1663,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
         if cheapest and cheapest.get('ticket_link') and cheapest != best:
             response += f"   [Купить дешёвый]({cheapest['ticket_link']})\n"
         
-        response += "\n💡 Чтобы изменить приоритет поиска, зайдите в Настройки."
+        response += "\n💡 Чтобы изменить приоритет поиска, зайдите в Настройки.
         
         if is_callback and update.callback_query:
             await update.callback_query.edit_message_text(response, parse_mode="Markdown", disable_web_page_preview=True)
