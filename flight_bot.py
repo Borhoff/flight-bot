@@ -629,7 +629,6 @@ def search_google_flights_fallback(origin, destination, date):
     except Exception as e:
         logger.error(f"❌ Критическая ошибка Google Flights fallback: {e}")
         return []
-
 def parse_google_flights_result(flights):
     """Парсит результат fast-flights в единый формат с проверками"""
     if not flights:
@@ -643,6 +642,11 @@ def parse_google_flights_result(flights):
                 
             price_usd = getattr(flight, 'price', None)
             if price_usd is None or price_usd == 'N/A':
+                continue
+            
+            # 🔥 ПРОВЕРКА НА НЕРЕАЛЬНО ВЫСОКУЮ ЦЕНУ (ОШИБКА КОНВЕРТАЦИИ)
+            if price_usd > 10000:
+                logger.warning(f"⚠️ Пропускаем рейс с подозрительной ценой: {price_usd} USD")
                 continue
                 
             airlines = getattr(flight, 'airlines', None)
@@ -1001,6 +1005,9 @@ def format_duration(minutes):
         return str(minutes)
 
 def format_flight_card_compact(flight, index=None, label=None):
+    """
+    Форматирует карточку рейса для вывода в Telegram
+    """
     price_usd = flight.get('price_usd', 'N/A')
     usd_to_rub = 91.0  # Актуальный курс USD/RUB
     
@@ -1009,15 +1016,17 @@ def format_flight_card_compact(flight, index=None, label=None):
         price_str = f"${price_usd} (~{price_rub:,} ₽)".replace(',', ' ')
     else:
         price_str = "N/A"
+    
     card = ""
     if index:
         card += f"*{index}.* "
     if label:
         card += f"{label} "
+    
+    # ТОЛЬКО НАЗВАНИЕ АВИАКОМПАНИИ, БЕЗ НОМЕРА РЕЙСА
     airline = flight.get('airline', 'N/A')
-    if flight.get('flight_number'):
-        airline += f" {flight['flight_number']}"
     card += f"✈️ *{airline}* — {price_str}\n"
+    
     segments = flight.get('segments', [])
     if segments:
         first_seg = segments[0]
@@ -1026,8 +1035,13 @@ def format_flight_card_compact(flight, index=None, label=None):
         arr = format_date_with_weekday(last_seg.get('arrival', 'N/A')) if last_seg.get('arrival') != 'N/A' else 'N/A'
         total = format_duration(flight.get('total_duration', 0))
         card += f"   {first_seg.get('from_code', 'N/A')} → {last_seg.get('to_code', 'N/A')}  🛫 {dep}  🛬 {arr}  ⏱ {total}\n"
+    
     stops = flight.get('stops', 0)
-    card += f"   {'🟢 *Прямой рейс*' if stops == 0 else f'🔄 *{stops} пересадки*'}"
+    if stops == 0:
+        card += f"   🟢 *Прямой рейс*"
+    else:
+        card += f"   🔄 *{stops} пересадки*"
+    
     return card
 
 def get_best_flights(flights_data, user_preferences):
@@ -1391,14 +1405,14 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
         response = f"✈️ *Найдено {len(all_flights)} рейсов* из {from_city} → {to_city} на {date}\n\n"
         
         if best:
-            response += f"⭐ *Лучший вариант:*\n{format_flight_card_compact(best)}\n"
+            response += f"⭐ *Лучший вариант:*\n{format_flight_card_compact(best, label='⭐')}\n"
             response += f"   {get_reason_compact(best, prefs)}\n\n"
         
         if cheapest and cheapest != best:
-            response += f"💰 *Самый дешёвый:*\n{format_flight_card_compact(cheapest)}\n\n"
+            response += f"💰 *Самый дешёвый:*\n{format_flight_card_compact(cheapest, label='💰')}\n\n"
         
         if fastest and fastest != best and fastest != cheapest:
-            response += f"⚡ *Самый быстрый:*\n{format_flight_card_compact(fastest)}\n\n"
+            response += f"⚡ *Самый быстрый:*\n{format_flight_card_compact(fastest, label='⚡')}\n\n"
         
         response += "🔗 *Ссылки на покупку:*\n"
         if best and best.get('ticket_link'):
@@ -1413,9 +1427,10 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
         else:
             await update.message.reply_text(response, parse_mode="Markdown", disable_web_page_preview=True)
         
+        # 👇 ПОКАЗЫВАЕМ ВСЕ РЕЙСЫ, А НЕ ТОЛЬКО 5
         remaining = [f for f in all_flights if f not in [best, cheapest, fastest]]
         if remaining:
-            extra = "\n".join([format_flight_card_compact(f, i+1) for i, f in enumerate(remaining[:5])])
+            extra = "\n".join([format_flight_card_compact(f, i+1) for i, f in enumerate(remaining)])
             extra_msg = f"📋 *Другие варианты:*\n\n{extra}"
             if is_callback and update.callback_query:
                 await update.callback_query.message.reply_text(extra_msg, parse_mode="Markdown")
