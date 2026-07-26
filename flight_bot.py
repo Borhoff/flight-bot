@@ -239,6 +239,9 @@ AIRLINE_NAMES = {
     "MF": "Xiamen Airlines",
 }
 
+# --- ДОБАВЬТЕ ЭТУ СТРОКУ ЗДЕСЬ ---
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+
 # --- КОНВЕРТАЦИЯ ВАЛЮТ ---
 def convert_to_usd(price, currency):
     if not price:
