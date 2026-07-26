@@ -640,13 +640,20 @@ def parse_google_flights_result(flights):
             if not flight:
                 continue
                 
-            price_usd = getattr(flight, 'price', None)
-            if price_usd is None or price_usd == 'N/A':
+            price_raw = getattr(flight, 'price', None)
+            if price_raw is None or price_raw == 'N/A':
                 continue
             
-            # 🔥 ПРОВЕРКА НА НЕРЕАЛЬНО ВЫСОКУЮ ЦЕНУ (ОШИБКА КОНВЕРТАЦИИ)
-            if price_usd > 10000:
-                logger.warning(f"⚠️ Пропускаем рейс с подозрительной ценой: {price_usd} USD")
+            # Определяем валюту: если цена > 2000, считаем что это рубли (т.к. типичный билет < 2000 USD)
+            if price_raw > 2000:
+                price_usd = price_raw / 91.0
+                logger.info(f"🔄 Конвертируем {price_raw} RUB → {price_usd:.2f} USD")
+            else:
+                price_usd = price_raw
+                
+            # Отсекаем совсем нереальные цены (> 5000 USD после конвертации)
+            if price_usd > 5000:
+                logger.warning(f"⚠️ Пропускаем рейс с подозрительной ценой: {price_usd:.2f} USD")
                 continue
                 
             airlines = getattr(flight, 'airlines', None)
@@ -678,7 +685,7 @@ def parse_google_flights_result(flights):
             
             flights_data.append({
                 'airline': airline,
-                'price_usd': price_usd,
+                'price_usd': round(price_usd, 2),
                 'segments': segments,
                 'total_segments': len(segments),
                 'total_duration': total_duration,
