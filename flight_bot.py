@@ -895,10 +895,21 @@ def get_city_keyboard(user_id=None, selected_city=None, direction="from"):
 def get_date_keyboard():
     today = datetime.now().date()
     buttons = [
-        [InlineKeyboardButton(f"📅 Сегодня ({today.strftime('%d.%m')})", callback_data=f"date_{today.strftime('%Y-%m-%d')}")],
-        [InlineKeyboardButton(f"📅 Завтра ({(today + timedelta(days=1)).strftime('%d.%m')})", callback_data=f"date_{(today + timedelta(days=1)).strftime('%Y-%m-%d')}")],
-        [InlineKeyboardButton(f"📅 Через неделю ({(today + timedelta(days=7)).strftime('%d.%m')})", callback_data=f"date_{(today + timedelta(days=7)).strftime('%Y-%m-%d')}")],
-        [InlineKeyboardButton("✏️ Ввести дату вручную", callback_data="manual_date")],
+        [
+            InlineKeyboardButton(f"📅 Сегодня ({today.strftime('%d.%m')})", callback_data=f"date_{today.strftime('%Y-%m-%d')}"),
+            InlineKeyboardButton(f"📅 Завтра ({(today + timedelta(days=1)).strftime('%d.%m')})", callback_data=f"date_{(today + timedelta(days=1)).strftime('%Y-%m-%d')}")
+        ],
+        [
+            InlineKeyboardButton(f"📅 Через 3 дня ({(today + timedelta(days=3)).strftime('%d.%m')})", callback_data=f"date_{(today + timedelta(days=3)).strftime('%Y-%m-%d')}"),
+            InlineKeyboardButton(f"📅 Через 7 дней ({(today + timedelta(days=7)).strftime('%d.%m')})", callback_data=f"date_{(today + timedelta(days=7)).strftime('%Y-%m-%d')}")
+        ],
+        [
+            InlineKeyboardButton(f"📅 Через 14 дней ({(today + timedelta(days=14)).strftime('%d.%m')})", callback_data=f"date_{(today + timedelta(days=14)).strftime('%Y-%m-%d')}"),
+            InlineKeyboardButton(f"📅 Через 30 дней ({(today + timedelta(days=30)).strftime('%d.%m')})", callback_data=f"date_{(today + timedelta(days=30)).strftime('%Y-%m-%d')}")
+        ],
+        [
+            InlineKeyboardButton("✏️ Своя дата", callback_data="manual_date")
+        ]
     ]
     return InlineKeyboardMarkup(buttons)
 
