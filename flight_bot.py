@@ -1176,18 +1176,33 @@ def get_favorite_city_keyboard():
     buttons.append([InlineKeyboardButton("❌ Отключить", callback_data="fav_city_none")])
     buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="settings_back")])
     return InlineKeyboardMarkup(buttons)
-
 def get_favorite_airport_keyboard(user_id):
     prefs = get_user_preferences(user_id)
     favorite_city = prefs.get('favorite_city', '')
+    
     if not favorite_city:
-        buttons = [[InlineKeyboardButton("❌ Сначала выберите город", callback_data="settings_back")], [InlineKeyboardButton("◀️ Назад", callback_data="settings_back")]]
+        buttons = [
+            [InlineKeyboardButton("❌ Сначала выберите город", callback_data="settings_back")],
+            [InlineKeyboardButton("◀️ Назад", callback_data="settings_back")]
+        ]
         return InlineKeyboardMarkup(buttons)
+    
+    # Получаем список аэропортов для города (реальные IATA-коды)
     codes = find_city_code(favorite_city)
+    
+    # Если не нашли — используем fallback
+    if not codes:
+        # Для Москвы явно указываем аэропорты
+        if favorite_city == "MOW":
+            codes = ["SVO", "DME", "VKO"]
+        else:
+            codes = [favorite_city]
+    
     buttons = []
     for code in codes:
         airport_name = get_airport_name(code)
         buttons.append([InlineKeyboardButton(f"✈️ {airport_name} ({code})", callback_data=f"fav_airport_{code}")])
+    
     buttons.append([InlineKeyboardButton("❌ Отключить", callback_data="fav_airport_none")])
     buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="settings_back")])
     return InlineKeyboardMarkup(buttons)
