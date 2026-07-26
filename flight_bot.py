@@ -20,6 +20,223 @@ from datetime import datetime, timedelta
 # Загружаем переменные окружения
 load_dotenv()
 
+# --- МАППИНГ КОДОВ АВИАКОМПАНИЙ В ПОЛНЫЕ НАЗВАНИЯ ---
+AIRLINE_NAMES = {
+    "FZ": "flydubai",
+    "EK": "Emirates",
+    "GF": "Gulf Air",
+    "QR": "Qatar Airways",
+    "TK": "Turkish Airlines",
+    "PC": "Pegasus",
+    "VF": "AJet",
+    "MS": "EgyptAir",
+    "RJ": "Royal Jordanian",
+    "EY": "Etihad Airways",
+    "SU": "Aeroflot",
+    "S7": "S7 Airlines",
+    "U6": "Ural Airlines",
+    "WZ": "Red Wings",
+    "EO": "Ikar",
+    "FV": "Rossiya",
+    "DP": "Pobeda",
+    "UT": "Utair",
+    "HY": "Uzbekistan Airways",
+    "KC": "Air Astana",
+    "J2": "Azerbaijan Airlines",
+    "HU": "Hainan Airlines",
+    "CZ": "China Southern",
+    "CA": "Air China",
+    "MU": "China Eastern",
+    "3U": "Sichuan Airlines",
+    "MF": "Xiamen Airlines",
+    "OZ": "Asiana Airlines",
+    "NH": "All Nippon Airways",
+    "JL": "Japan Airlines",
+    "KE": "Korean Air",
+    "SQ": "Singapore Airlines",
+    "TG": "Thai Airways",
+    "CX": "Cathay Pacific",
+    "BA": "British Airways",
+    "AF": "Air France",
+    "LH": "Lufthansa",
+    "KL": "KLM",
+    "VS": "Virgin Atlantic",
+    "DL": "Delta Air Lines",
+    "AA": "American Airlines",
+    "UA": "United Airlines",
+    "WN": "Southwest Airlines",
+    "B6": "JetBlue",
+    "NK": "Spirit Airlines",
+    "F9": "Frontier Airlines",
+    "AS": "Alaska Airlines",
+    "HA": "Hawaiian Airlines",
+    "SY": "Sun Country Airlines",
+    "G4": "Allegiant Air",
+    "XP": "Avelo Airlines",
+    "MX": "Breeze Airways",
+    "KQ": "Kenya Airways",
+    "ET": "Ethiopian Airlines",
+    "SA": "South African Airways",
+    "AT": "Royal Air Maroc",
+    "TP": "TAP Air Portugal",
+    "IB": "Iberia",
+    "AY": "Finnair",
+    "SK": "SAS",
+    "OS": "Austrian Airlines",
+    "LX": "Swiss International Air Lines",
+    "SN": "Brussels Airlines",
+    "LO": "LOT Polish Airlines",
+    "OK": "Czech Airlines",
+    "OU": "Croatia Airlines",
+    "JU": "Air Serbia",
+    "A3": "Aegean Airlines",
+    "OA": "Olympic Air",
+    "BT": "Air Baltic",
+    "JP": "Adria Airways",
+    "EW": "Eurowings",
+    "4U": "Germanwings",
+    "AB": "Air Berlin",
+    "HG": "Niki",
+    "XQ": "SunExpress",
+    "XC": "Corendon Airlines",
+    "FH": "Freebird Airlines",
+    "H9": "Pegasus (Domestic)",
+    "KK": "AtlasGlobal",
+    "QS": "Smartwings",
+    "SS": "Corsair International",
+    "SE": "XL Airways France",
+    "TO": "Transavia France",
+    "VY": "Vueling",
+    "U2": "easyJet",
+    "FR": "Ryanair",
+    "W6": "Wizz Air",
+    "DY": "Norwegian Air Shuttle",
+    "D8": "Norwegian Air Sweden",
+    "FI": "Icelandair",
+    "OG": "Play",
+    "WW": "WOW Air",
+    "ZB": "Monarch Airlines",
+    "MT": "Thomas Cook Airlines",
+    "TC": "TUI Airways",
+    "BY": "TUI Airways (UK)",
+    "X3": "TUI fly Netherlands",
+    "OR": "TUI fly Netherlands",
+    "HQ": "TUI fly Belgium",
+    "TB": "TUI fly Belgium",
+    "XR": "Corendon Dutch Airlines",
+    "CD": "Corendon Dutch Airlines",
+    "CND": "Corendon Dutch Airlines",
+    "CJ": "BA CityFlyer",
+    "BM": "British Midland Regional",
+    "LM": "Loganair",
+    "SI": "Skyways",
+    "DC": "Braathens Regional Airways",
+    "TF": "Braathens Regional Airlines",
+    "WX": "CityJet",
+    "EI": "Aer Lingus",
+    "RE": "Aer Lingus Regional",
+    "BE": "Flybe",
+    "T3": "Eastern Airways",
+    "GR": "Aurigny Air Services",
+    "JS": "Air Koryo",
+    "P7": "Air Kasai",
+    "BU": "Air Busan",
+    "7C": "Jeju Air",
+    "LJ": "Jin Air",
+    "TW": "T'Way Air",
+    "ZE": "Eastar Jet",
+    "RS": "Air Seoul",
+    "BX": "Air Busan",
+    "KE": "Korean Air",
+    "OZ": "Asiana Airlines",
+    "JL": "Japan Airlines",
+    "NH": "All Nippon Airways",
+    "BC": "Skymark Airlines",
+    "MM": "Peach Aviation",
+    "GK": "Jetstar Japan",
+    "JW": "Vanilla Air",
+    "6J": "Solaseed Air",
+    "NU": "Japan Transocean Air",
+    "RAC": "Ryukyu Air Commuter",
+    "JC": "JAL Express",
+    "XW": "NokScoot",
+    "TZ": "Scoot",
+    "TR": "Scoot",
+    "SQ": "Singapore Airlines",
+    "MI": "SilkAir",
+    "3K": "Jetstar Asia",
+    "GK": "Jetstar Japan",
+    "JQ": "Jetstar Airways",
+    "QF": "Qantas",
+    "VA": "Virgin Australia",
+    "TT": "Tigerair Australia",
+    "NZ": "Air New Zealand",
+    "LA": "LATAM Airlines",
+    "JJ": "LATAM Brasil",
+    "4M": "LATAM Argentina",
+    "PU": "LATAM Paraguay",
+    "PZ": "LATAM Peru",
+    "XL": "LATAM Ecuador",
+    "UC": "LATAM Colombia",
+    "CM": "Copa Airlines",
+    "AV": "Avianca",
+    "P5": "Wingo",
+    "TK": "Turkish Airlines",
+    "J2": "Azerbaijan Airlines",
+    "HZ": "Aurora Airlines",
+    "SH": "Sharp Airlines",
+    "ZL": "Regional Express",
+    "QQ": "Alliance Airlines",
+    "VA": "Virgin Australia",
+    "TT": "Tigerair Australia",
+    "QF": "Qantas",
+    "JQ": "Jetstar",
+    "EK": "Emirates",
+    "EY": "Etihad",
+    "QR": "Qatar",
+    "GF": "Gulf Air",
+    "WY": "Oman Air",
+    "KU": "Kuwait Airways",
+    "MH": "Malaysia Airlines",
+    "AK": "AirAsia",
+    "D7": "AirAsia X",
+    "QZ": "Indonesia AirAsia",
+    "FD": "Thai AirAsia",
+    "XJ": "Thai AirAsia X",
+    "Z2": "Philippines AirAsia",
+    "PQ": "Philippines AirAsia",
+    "5J": "Cebu Pacific",
+    "DG": "Cebgo",
+    "PR": "Philippine Airlines",
+    "2P": "Air Philippines",
+    "PAL": "Philippine Airlines",
+    "GX": "GX Airlines",
+    "JD": "Beijing Capital Airlines",
+    "8L": "Lucky Air",
+    "PN": "West Air",
+    "FU": "Fuzhou Airlines",
+    "ZH": "Shenzhen Airlines",
+    "SC": "Shandong Airlines",
+    "MF": "Xiamen Airlines",
+    "FM": "Shanghai Airlines",
+    "KN": "China United Airlines",
+    "BK": "Okay Airways",
+    "GS": "Tianjin Airlines",
+    "G5": "China Express Airlines",
+    "EU": "Chengdu Airlines",
+    "9C": "Spring Airlines",
+    "AQ": "9 Air",
+    "Y8": "YTO Cargo Airlines",
+    "HT": "Hainan Airlines (Cargo)",
+    "HU": "Hainan Airlines",
+    "CZ": "China Southern",
+    "CA": "Air China",
+    "MU": "China Eastern",
+    "3U": "Sichuan Airlines",
+    "ZH": "Shenzhen Airlines",
+    "MF": "Xiamen Airlines",
+}
+
 # Настраиваем логгер
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,22 +261,19 @@ def search_aviasales_data_api(origin, destination, date):
     Поиск рейсов через Aviasales Data API
     Возвращает список рейсов в формате, совместимом с fast-flights
     """
-    # Твой существующий токен
     API_TOKEN = TRAVELPAYOUTS_TOKEN
-    # Базовый URL для Data API
     BASE_URL = "https://api.travelpayouts.com/aviasales/v3/prices_for_dates"
     
-    # Параметры запроса
     params = {
-        "origin": origin,          # IATA-код города вылета
-        "destination": destination,# IATA-код города прибытия
-        "departure_at": date,      # Дата в формате YYYY-MM-DD
-        "one_way": "true",         # Ищем только в одну сторону
+        "origin": origin,
+        "destination": destination,
+        "departure_at": date,
+        "one_way": "true",
         "token": API_TOKEN,
-        "currency": "rub",         # Цены в рублях
-        "limit": 10,               # Максимум 10 результатов
-        "sorting": "price",        # Сортировка по цене
-        "market": "ru"             # Рынок (можно оставить ru или указать свой)
+        "currency": "rub",
+        "limit": 10,
+        "sorting": "price",
+        "market": "ru"   # Явно указываем российский рынок
     }
     
     try:
@@ -85,9 +299,9 @@ def search_aviasales_data_api(origin, destination, date):
         parsed_flights = []
         for item in flights_data[:10]:
             try:
-                # Конвертируем рубли в доллары (примерный курс)
+                # Конвертируем рубли в доллары
                 price_rub = item.get("price", 0)
-                price_usd = round(price_rub / 91.0, 2)  # Примерный курс USD/RUB
+                price_usd = round(price_rub / 91.0, 2)
                 
                 # Извлекаем данные о перелёте
                 dep_datetime = item.get("departure_at", "")
@@ -103,8 +317,9 @@ def search_aviasales_data_api(origin, destination, date):
                     except:
                         pass
                 
-                # Определяем авиакомпанию
-                airline = item.get("airline", "N/A")
+                # Определяем авиакомпанию с маппингом кода в название
+                airline_code = item.get("airline", "N/A")
+                airline = AIRLINE_NAMES.get(airline_code, airline_code)
                 flight_number = item.get("flight_number", "")
                 
                 parsed_flights.append({
