@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from fast_flights import FlightQuery, Passengers, create_query, get_flights
+from fast_flights import FlightQuery, Passengers, create_query, get_flights, FlightData
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
@@ -296,6 +296,47 @@ def generate_aviasales_link(origin, destination, date, adults=1):
     base_url = "https://www.aviasales.ru/search"
     params = f"{origin}{date_str}{destination}{adults}"
     return f"{base_url}/{params}?request_source=search_form"
+
+def generate_google_flights_link(origin, destination, date, return_date=None):
+    """
+    Генерирует ссылку на Google Flights с параметром tfs для one-way или round-trip.
+    Если return_date указан — round-trip, иначе one-way.
+    """
+    try:
+        from fast_flights import FlightData, Passengers, get_flights
+        
+        flight_data = FlightData(
+            date=date,
+            from_airport=origin,
+            to_airport=destination,
+        )
+        
+        trip_type = "round-trip" if return_date else "one-way"
+        
+        result = get_flights(
+            flight_data=[flight_data],
+            trip=trip_type,
+            seat="economy",
+            passengers=Passengers(adults=1),
+            fetch_mode="raw",
+            return_date=return_date,  # None для one-way
+        )
+        
+        # Получаем URL из результата
+        return result.url
+    except Exception as e:
+        logger.error(f"❌ Ошибка генерации ссылки Google Flights: {e}")
+        # Fallback: простая ссылка с q-параметром
+        from_city_name = origin
+        to_city_name = destination
+        for name, code in CITIES.items():
+            if code == origin:
+                from_city_name = name
+            if code == destination:
+                to_city_name = name
+        query = f"{from_city_name} {to_city_name} {date}"
+        query_encoded = query.replace(" ", "+")
+        return f"https://www.google.com/travel/flights/search?q={query_encoded}"
 
 # --- БАЗА АЭРОПОРТОВ И КОНВЕРТЕРЫ ---
 def load_airports():
@@ -1331,26 +1372,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback: bool = False):
     user_data = context.user_data
     user_id = update.effective_user.id
+    
     from_city = user_data.get('from_city_name', '')
     to_city = user_data.get('to_city_name', '')
     date = user_data.get('date', '')
+    
     if not from_city or not to_city or not date:
         if is_callback and update.callback_query:
             await update.callback_query.edit_message_text("❌ Не все данные для поиска заполнены. Начните заново.")
         else:
             await update.message.reply_text("❌ Не все данные для поиска заполнены. Начните заново.")
         return
+    
     search_msg = f"🔍 Ищу билеты из *{from_city}* в *{to_city}* на *{date}*...\nЭто может занять до 30 секунд."
+    
     if is_callback and update.callback_query:
         await update.callback_query.edit_message_text(search_msg, parse_mode="Markdown")
     else:
         await update.message.reply_text(search_msg, parse_mode="Markdown")
+    
     try:
         from_codes = user_data.get('from_city_codes', [])
         to_codes = user_data.get('to_city_codes', [])
+        
         if not from_codes or not to_codes:
             from_codes = find_city_code(from_city)
             to_codes = find_city_code(to_city)
+            
         if not from_codes or not to_codes:
             error_msg = "❌ Не удалось определить коды аэропортов. Попробуйте выбрать город из списка."
             if is_callback and update.callback_query:
@@ -1358,11 +1406,13 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
             else:
                 await update.message.reply_text(error_msg, parse_mode="Markdown")
             return
+        
         all_flights = []
         for from_code in from_codes[:2]:
             for to_code in to_codes[:2]:
                 flights = search_all_flights(from_code, to_code, date)
                 all_flights.extend(flights)
+        
         if not all_flights:
             error_msg = "😔 К сожалению, рейсы не найдены.\nПопробуйте другую дату или направление."
             if is_callback and update.callback_query:
@@ -1370,33 +1420,42 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
             else:
                 await update.message.reply_text(error_msg, parse_mode="Markdown")
             return
+        
         prefs = get_user_preferences(user_id)
         best, cheapest, fastest = get_best_flights(all_flights, prefs)
         save_search_history(user_id, from_city, to_city, date, f"{from_city}→{to_city} {date}", all_flights[:10])
+        
         response = f"✈️ *Найдено {len(all_flights)} рейсов* из {from_city} → {to_city} на {date}\n\n"
+        
         if best:
             response += f"⭐ *Лучший вариант:*\n{format_flight_card_compact(best, label='⭐')}\n"
             response += f"   {get_reason_compact(best, prefs)}\n\n"
+        
         if cheapest and cheapest != best:
             response += f"💰 *Самый дешёвый:*\n{format_flight_card_compact(cheapest, label='💰')}\n\n"
+        
         if fastest and fastest != best and fastest != cheapest:
             response += f"⚡ *Самый быстрый:*\n{format_flight_card_compact(fastest, label='⚡')}\n\n"
-        response += "🔗 *Где купить:*\n"
-        # Генерируем ссылку на Aviasales с IATA-кодами
-        if from_codes and to_codes:
-            aviasales_link = generate_aviasales_link(from_codes[0], to_codes[0], date)
-        else:
-            aviasales_link = generate_aviasales_link(from_city, to_city, date)
-        response += f"   [Купить на Aviasales]({aviasales_link})\n"
-        if best and best.get('ticket_link'):
-            response += f"   [Купить лучший вариант]({best['ticket_link']})\n"
-        if cheapest and cheapest.get('ticket_link') and cheapest != best:
-            response += f"   [Купить дешёвый]({cheapest['ticket_link']})\n"
+        
+        # --- ССЫЛКИ НА ПОКУПКУ (ТОЛЬКО 2) ---
+        response += "\n🔗 *Где купить:*\n"
+        
+        # 1️⃣ Google Flights (основная)
+        google_link = generate_google_flights_link(from_city, to_city, date)
+        response += f"   [✈️ Найти на Google Flights]({google_link})\n"
+        
+        # 2️⃣ Aviasales (альтернативный поиск)
+        aviasales_link = generate_aviasales_link(from_city, to_city, date)
+        response += f"   [🔍 Сравнить цены на Aviasales]({aviasales_link})\n"
+        # ------------------------------------
+        
         response += "\n💡 Чтобы изменить приоритет поиска, зайдите в Настройки."
+        
         if is_callback and update.callback_query:
             await update.callback_query.edit_message_text(response, parse_mode="Markdown", disable_web_page_preview=True)
         else:
             await update.message.reply_text(response, parse_mode="Markdown", disable_web_page_preview=True)
+        
         remaining = [f for f in all_flights if f not in [best, cheapest, fastest]]
         if remaining:
             extra = "\n".join([format_flight_card_compact(f, i+1) for i, f in enumerate(remaining)])
@@ -1405,6 +1464,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
                 await update.callback_query.message.reply_text(extra_msg, parse_mode="Markdown")
             else:
                 await update.message.reply_text(extra_msg, parse_mode="Markdown")
+            
     except Exception as e:
         logger.error(f"❌ Ошибка поиска: {e}")
         error_msg = f"❌ Произошла ошибка при поиске: {str(e)}\nПопробуйте позже или выберите другой маршрут."
