@@ -279,69 +279,27 @@ def get_airports_for_city(city_code):
 # --- ГЕНЕРАЦИЯ ССЫЛКИ НА AVIASALES ---
 def generate_aviasales_link(origin, destination, date, adults=1):
     """
-    Генерирует ссылку на Aviasales с автоматическим запуском поиска
-    Формат: https://www.aviasales.ru/search/MOW0208DXB1?request_source=search_form
+    Генерирует ссылку на Aviasales (русская версия) с заполненными параметрами.
+    Формат: https://www.aviasales.ru/search/{origin}{ddmm}{destination}{adults}
     """
-    # Форматируем дату: день+месяц (2 цифры каждое)
     try:
-        dt = datetime.strptime(date, "%Y-%m-%d")
-        day = str(dt.day).zfill(2)
-        month = str(dt.month).zfill(2)
-        date_str = f"{day}{month}"
+        date_parts = date.split("-")
+        day = date_parts[2]
+        month = date_parts[1]
+        date_str = f"{day}{month}"  # например, "0208" для 2 августа
     except:
-        # Если дата не распарсилась, используем пустую строку
-        date_str = ""
+        date_str = "0101"  # fallback на случай ошибки
     
-    # Формируем ссылку с автоматическим запуском поиска
-    base_url = "https://www.aviasales.ru/search"
-    params = f"{origin}{date_str}{destination}{adults}"
-    return f"{base_url}/{params}?request_source=search_form"
+    return f"https://www.aviasales.ru/search/{origin}{date_str}{destination}{adults}"
 
-def generate_google_flights_link(origin, destination, date, return_date=None):
+def generate_google_flights_link(origin, destination, date):
     """
-    Генерирует ссылку на Google Flights с параметром tfs.
+    Генерирует ссылку на Google Flights с заполненными параметрами поиска
     """
-    try:
-        from fast_flights import FlightQuery, Passengers, create_query, get_flights
-
-        # Определяем тип поездки
-        trip_type = "round-trip" if return_date else "one-way"
-
-        # Создаём список сегментов (один для one-way, два для round-trip)
-        segments = [FlightQuery(date=date, from_airport=origin, to_airport=destination)]
-
-        # Для round-trip добавляем обратный сегмент
-        if return_date:
-            segments.append(FlightQuery(date=return_date, from_airport=destination, to_airport=origin))
-
-        # Создаём запрос
-        query = create_query(
-            flights=segments,
-            trip=trip_type,
-            seat="economy",
-            passengers=Passengers(adults=1),
-            language="en-US",
-        )
-
-        # Выполняем поиск для получения ссылки
-        result = get_flights(query)
-
-        # Извлекаем URL из результата (если есть)
-        if hasattr(result, 'url') and result.url:
-            return result.url
-
-        # Если явного URL нет, формируем его сами
-        # Берём первый сегмент для one-way или оба для round-trip
-        first_segment = segments[0]
-        tfs = f"CBwQAhopEgoyMDI2LTA4LTA1ag0IAxIJL20vMDFmMDhycgwIAxIIL20vMDRzd2RAAUgBcAGCAQsI____________AZgBAg"
-        # Это пример, в реальности нужно генерировать tfs правильно
-        # Возвращаем fallback-ссылку с параметрами
-        return f"https://www.google.com/travel/flights/search?q={origin}+{destination}+{date}"
-
-    except Exception as e:
-        logger.error(f"❌ Ошибка генерации ссылки Google Flights: {e}")
-        # Fallback: простая ссылка
-        return f"https://www.google.com/travel/flights/search?q={origin}+{destination}+{date}"
+    base_url = "https://www.google.com/travel/flights/search"
+    query = f"{origin} {destination} {date}"
+    query_encoded = query.replace(" ", "+")
+    return f"{base_url}?q={query_encoded}"
 
 # --- БАЗА АЭРОПОРТОВ И КОНВЕРТЕРЫ ---
 def load_airports():
@@ -1377,7 +1335,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback: bool = False):
     user_data = context.user_data
     user_id = update.effective_user.id
-    
     from_city = user_data.get('from_city_name', '')
     to_city = user_data.get('to_city_name', '')
     date = user_data.get('date', '')
@@ -1442,17 +1399,14 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
         if fastest and fastest != best and fastest != cheapest:
             response += f"⚡ *Самый быстрый:*\n{format_flight_card_compact(fastest, label='⚡')}\n\n"
         
-        # --- ССЫЛКИ НА ПОКУПКУ (ТОЛЬКО 2) ---
+        # БЛОК ССЫЛОК (без прямой ссылки на билет)
         response += "\n🔗 *Где купить:*\n"
-        
-        # 1️⃣ Google Flights (основная)
         google_link = generate_google_flights_link(from_city, to_city, date)
-        response += f"   [✈️ Найти на Google Flights]({google_link})\n"
-        
-        # 2️⃣ Aviasales (альтернативный поиск)
+        response += f"   [✈️ Поиск на Google Flights]({google_link})\n"
+        response += "\n---\n\n"
         aviasales_link = generate_aviasales_link(from_city, to_city, date)
-        response += f"   [🔍 Сравнить цены на Aviasales]({aviasales_link})\n"
-        # ------------------------------------
+        response += f"   [🔍 Проверить цены на Aviasales]({aviasales_link})\n"
+        response += "   *(возможны другие варианты)*"
         
         response += "\n💡 Чтобы изменить приоритет поиска, зайдите в Настройки."
         
@@ -1461,6 +1415,7 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
         else:
             await update.message.reply_text(response, parse_mode="Markdown", disable_web_page_preview=True)
         
+        # Показываем все остальные рейсы
         remaining = [f for f in all_flights if f not in [best, cheapest, fastest]]
         if remaining:
             extra = "\n".join([format_flight_card_compact(f, i+1) for i, f in enumerate(remaining)])
