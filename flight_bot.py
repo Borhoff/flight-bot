@@ -413,22 +413,6 @@ def parse_google_flights_v2(results):
     
     return flights_data
 
-# --- FLI (оптимизированная) ---
-def search_fli_optimized(origin, destination, date):
-    """FLI для параллельного поиска (ТОЛЬКО ПРЯМОЕ НАПРАВЛЕНИЕ) с подробными логами"""
-    logger.info(f"📡 FLI: {origin}→{destination} (вход в функцию)")
-    
-    try:
-        from fli.models import Airport, PassengerInfo, SeatType, MaxStops, SortBy, FlightSearchFilters, FlightSegment
-        from fli.search import SearchFlights
-        logger.info(f"  ✅ FLI: импорт успешен")
-    except ImportError as e:
-        logger.error(f"  ❌ FLI: импорт не удался: {e}")
-        return []
-    except Exception as e:
-        logger.error(f"  ❌ FLI: ошибка импорта: {e}")
-        return []
-    
     # Расширяем коды городов до аэропортов
     airports_map = {
         "MOW": ["SVO", "DME", "VKO"],
@@ -787,11 +771,6 @@ def search_all_flights(from_city, to_city, date):
             logger.info("🔍 2️⃣ Google v2...")
             future_gf = executor.submit(search_google_flights_v2, from_city, to_city, date)
             futures['Google v2'] = future_gf
-        
-        # 3️⃣ FLI
-        logger.info("🔍 3️⃣ FLI...")
-        future_fli = executor.submit(search_fli_optimized, from_city, to_city, date)
-        futures['FLI'] = future_fli
         
         # 4️⃣ fast-flights
         logger.info("🔍 4️⃣ fast-flights...")
