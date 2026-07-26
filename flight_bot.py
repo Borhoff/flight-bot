@@ -261,6 +261,21 @@ def convert_to_usd(price, currency):
     rate = rates.get(currency.upper(), 1.0)
     return round(float(price) * rate, 2)
 
+def get_airports_for_city(city_code):
+    """Возвращает список реальных аэропортов для кода города"""
+    city_airports = {
+        "MOW": ["SVO", "DME", "VKO"],
+        "DXB": ["DXB", "DWC", "SHJ"],
+        "LON": ["LHR", "LGW", "STN", "LCY"],
+        "NYC": ["JFK", "EWR", "LGA"],
+        "PAR": ["CDG", "ORY", "BVA"],
+        "IST": ["IST", "SAW"],
+        "BKK": ["BKK", "DMK"],
+        "TYO": ["NRT", "HND"],
+        "PEK": ["PEK", "PKX"],
+    }
+    return city_airports.get(city_code, [city_code])
+
 # --- ГЕНЕРАЦИЯ ССЫЛКИ НА AVIASALES ---
 def generate_aviasales_link(origin, destination, date, adults=1):
     base_url = "https://www.aviasales.com/search"
@@ -1210,7 +1225,7 @@ def get_favorite_airport_keyboard(user_id):
         "LED": ["LED"],
     }
     
-    codes = city_airports.get(favorite_city_code)
+    codes = get_airports_for_city(favorite_city_code)
     if not codes:
         # Если код не найден, пробуем найти по названию города через обратный словарь CITIES
         city_name = None
