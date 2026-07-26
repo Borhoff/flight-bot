@@ -629,6 +629,7 @@ def search_google_flights_fallback(origin, destination, date):
     except Exception as e:
         logger.error(f"❌ Критическая ошибка Google Flights fallback: {e}")
         return []
+        
 def parse_google_flights_result(flights):
     """Парсит результат fast-flights в единый формат с проверками"""
     if not flights:
@@ -644,14 +645,14 @@ def parse_google_flights_result(flights):
             if price_raw is None or price_raw == 'N/A':
                 continue
             
-            # Определяем валюту: если цена > 2000, считаем что это рубли (т.к. типичный билет < 2000 USD)
+            # Определяем валюту: если цена > 2000, считаем что это рубли
             if price_raw > 2000:
                 price_usd = price_raw / 91.0
                 logger.info(f"🔄 Конвертируем {price_raw} RUB → {price_usd:.2f} USD")
             else:
                 price_usd = price_raw
                 
-            # Отсекаем совсем нереальные цены (> 5000 USD после конвертации)
+            # Отсекаем совсем нереальные цены (> 5000 USD)
             if price_usd > 5000:
                 logger.warning(f"⚠️ Пропускаем рейс с подозрительной ценой: {price_usd:.2f} USD")
                 continue
@@ -659,7 +660,8 @@ def parse_google_flights_result(flights):
             airlines = getattr(flight, 'airlines', None)
             if not airlines or len(airlines) == 0:
                 continue
-            airline = airlines[0] if airlines else 'N/A'
+            airline_code = airlines[0] if airlines else 'N/A'
+            airline = AIRLINE_NAMES.get(airline_code, airline_code)  # <-- МАППИНГ
             
             flight_list = getattr(flight, 'flights', [])
             if not flight_list or len(flight_list) == 0:
