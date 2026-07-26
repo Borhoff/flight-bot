@@ -277,27 +277,28 @@ def get_airports_for_city(city_code):
     return city_airports.get(city_code, [city_code])
 
 # --- ГЕНЕРАЦИЯ ССЫЛКИ НА AVIASALES ---
-def generate_aviasales_link(origin, destination, date, adults=1):
+def generate_aviasales_link(origin_code, destination_code, date, adults=1):
     """
     Генерирует ссылку на Aviasales (русская версия) с заполненными параметрами.
-    Формат: https://www.aviasales.ru/search/{origin}{ddmm}{destination}{adults}
+    Формат: https://www.aviasales.ru/search/{origin_code}{ddmm}{destination_code}{adults}
+    origin_code и destination_code — IATA-коды (например, MOW, DXB).
     """
     try:
         date_parts = date.split("-")
         day = date_parts[2]
         month = date_parts[1]
-        date_str = f"{day}{month}"  # например, "0208" для 2 августа
+        date_str = f"{day}{month}"  # например, "0208"
     except:
-        date_str = "0101"  # fallback на случай ошибки
-    
-    return f"https://www.aviasales.ru/search/{origin}{date_str}{destination}{adults}"
-
-def generate_google_flights_link(origin, destination, date):
+        date_str = "0101"
+    return f"https://www.aviasales.ru/search/{origin_code}{date_str}{destination_code}{adults}"
+def generate_google_flights_link(origin_code, destination_code, date):
     """
-    Генерирует ссылку на Google Flights с заполненными параметрами поиска
+    Генерирует ссылку на Google Flights с заполненными параметрами.
+    Использует IATA-коды (например, MOW, DXB).
     """
     base_url = "https://www.google.com/travel/flights/search"
-    query = f"{origin} {destination} {date}"
+    # Используем коды, а не названия
+    query = f"{origin_code} {destination_code} {date}"
     query_encoded = query.replace(" ", "+")
     return f"{base_url}?q={query_encoded}"
 
@@ -1399,14 +1400,18 @@ async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_
         if fastest and fastest != best and fastest != cheapest:
             response += f"⚡ *Самый быстрый:*\n{format_flight_card_compact(fastest, label='⚡')}\n\n"
         
-        # БЛОК ССЫЛОК (без прямой ссылки на билет)
-        response += "\n🔗 *Где купить:*\n"
-        google_link = generate_google_flights_link(from_city, to_city, date)
-        response += f"   [✈️ Поиск на Google Flights]({google_link})\n"
-        response += "\n---\n\n"
-        aviasales_link = generate_aviasales_link(from_city, to_city, date)
-        response += f"   [🔍 Проверить цены на Aviasales]({aviasales_link})\n"
-        response += "   *(возможны другие варианты)*"
+        # БЛОК ССЫЛОК (только Google Flights и Aviasales, используем IATA-коды)
+        # Берём первые IATA-коды из списков
+        from_code = from_codes[0] if from_codes else None
+        to_code = to_codes[0] if to_codes else None
+        if from_code and to_code:
+            response += "\n🔗 *Где купить:*\n"
+            google_link = generate_google_flights_link(from_code, to_code, date)
+            response += f"   [✈️ Поиск на Google Flights]({google_link})\n"
+            response += "\n---\n\n"
+            aviasales_link = generate_aviasales_link(from_code, to_code, date)
+            response += f"   [🔍 Проверить цены на Aviasales]({aviasales_link})\n"
+            response += "   *(возможны другие варианты)*"
         
         response += "\n💡 Чтобы изменить приоритет поиска, зайдите в Настройки."
         
