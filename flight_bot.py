@@ -14,6 +14,8 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+import requests
+from datetime import datetime, timedelta
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -36,6 +38,106 @@ logger.info(f"🔍 GOOGLE_FLIGHTS_V2_AVAILABLE = {GOOGLE_FLIGHTS_V2_AVAILABLE}")
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 USD_TO_RUB = 95.0
 TRAVELPAYOUTS_TOKEN = "eb631f12ac7f83fda4125614a6dd04bc"
+
+def search_aviasales_data_api(origin, destination, date):
+    """
+    Поиск рейсов через Aviasales Data API
+    Возвращает список рейсов в формате, совместимом с fast-flights
+    """
+    # Твой существующий токен
+    API_TOKEN = TRAVELPAYOUTS_TOKEN
+    # Базовый URL для Data API
+    BASE_URL = "https://api.travelpayouts.com/aviasales/v3/prices_for_dates"
+    
+    # Параметры запроса
+    params = {
+        "origin": origin,          # IATA-код города вылета
+        "destination": destination,# IATA-код города прибытия
+        "departure_at": date,      # Дата в формате YYYY-MM-DD
+        "one_way": "true",         # Ищем только в одну сторону
+        "token": API_TOKEN,
+        "currency": "rub",         # Цены в рублях
+        "limit": 10,               # Максимум 10 результатов
+        "sorting": "price",        # Сортировка по цене
+        "market": "ru"             # Рынок (можно оставить ru или указать свой)
+    }
+    
+    try:
+        logger.info(f"📡 Aviasales Data API запрос: {origin}→{destination} {date}")
+        response = requests.get(BASE_URL, params=params, timeout=10)
+        
+        if response.status_code != 200:
+            logger.warning(f"⚠️ Aviasales Data API ошибка: {response.status_code}")
+            return []
+            
+        data = response.json()
+        
+        if not data.get("success"):
+            logger.warning(f"⚠️ Aviasales Data API: {data.get('error', 'Unknown error')}")
+            return []
+            
+        flights_data = data.get("data", [])
+        if not flights_data:
+            logger.info(f"ℹ️ Aviasales Data API: рейсы не найдены для {origin}→{destination}")
+            return []
+            
+        # Парсим результаты в единый формат
+        parsed_flights = []
+        for item in flights_data[:10]:
+            try:
+                # Конвертируем рубли в доллары (примерный курс)
+                price_rub = item.get("price", 0)
+                price_usd = round(price_rub / 91.0, 2)  # Примерный курс USD/RUB
+                
+                # Извлекаем данные о перелёте
+                dep_datetime = item.get("departure_at", "")
+                arr_datetime = item.get("return_at", "")
+                
+                # Считаем длительность (если есть)
+                duration = 0
+                if dep_datetime and arr_datetime:
+                    try:
+                        dep_dt = datetime.fromisoformat(dep_datetime.replace("Z", "+00:00"))
+                        arr_dt = datetime.fromisoformat(arr_datetime.replace("Z", "+00:00"))
+                        duration = int((arr_dt - dep_dt).total_seconds() / 60)
+                    except:
+                        pass
+                
+                # Определяем авиакомпанию
+                airline = item.get("airline", "N/A")
+                flight_number = item.get("flight_number", "")
+                
+                parsed_flights.append({
+                    'airline': airline,
+                    'price_usd': price_usd,
+                    'segments': [{
+                        'from_code': origin,
+                        'to_code': destination,
+                        'departure': dep_datetime,
+                        'arrival': arr_datetime,
+                        'duration': duration,
+                        'departure_hour': 12
+                    }],
+                    'total_segments': 1,
+                    'total_duration': duration,
+                    'stops': 0,  # Data API не даёт информацию о пересадках
+                    'flight_number': flight_number,
+                    'ticket_link': item.get("ticket_link", ""),
+                    'source': 'aviasales-data-api'
+                })
+            except Exception as e:
+                logger.error(f"❌ Ошибка парсинга рейса Aviasales: {e}")
+                continue
+                
+        logger.info(f"✅ Aviasales Data API: найдено {len(parsed_flights)} рейсов")
+        return parsed_flights
+        
+    except requests.exceptions.Timeout:
+        logger.error("⏰ Aviasales Data API: таймаут")
+        return []
+    except Exception as e:
+        logger.error(f"❌ Aviasales Data API ошибка: {e}")
+        return []
 
 # --- КОНВЕРТАЦИЯ ВАЛЮТ ---
 def convert_to_usd(price, currency):
@@ -413,126 +515,6 @@ def parse_google_flights_v2(results):
     
     return flights_data
 
-    # Расширяем коды городов до аэропортов
-    airports_map = {
-        "MOW": ["SVO", "DME", "VKO"],
-        "DXB": ["DXB", "DWC", "SHJ"],
-        "LON": ["LHR", "LGW", "STN", "LCY"],
-        "NYC": ["JFK", "EWR", "LGA"],
-        "PAR": ["CDG", "ORY", "BVA"],
-        "IST": ["IST", "SAW"],
-        "BKK": ["BKK", "DMK"],
-        "PEK": ["PEK", "PKX"],  # Добавляем Пекин
-    }
-    
-    from_airports = airports_map.get(origin, [origin])
-    to_airports = airports_map.get(destination, [destination])
-    logger.info(f"  🗺️ FLI: аэропорты вылета: {from_airports}, прилёта: {to_airports}")
-    
-    all_flights = []
-    total_pairs = len(from_airports) * len(to_airports)
-    processed_pairs = 0
-    
-    for from_ap in from_airports:
-        for to_ap in to_airports:
-            processed_pairs += 1
-            logger.info(f"  🔍 FLI: пробуем {from_ap}→{to_ap} ({processed_pairs}/{total_pairs})")
-            
-            if len(from_ap) != 3 or len(to_ap) != 3:
-                logger.warning(f"    ⚠️ FLI: неверный код {from_ap} или {to_ap}, пропускаем")
-                continue
-            
-            try:
-                from_airport = getattr(Airport, from_ap.upper(), None)
-                to_airport = getattr(Airport, to_ap.upper(), None)
-                
-                if not from_airport or not to_airport:
-                    logger.warning(f"    ⚠️ FLI: неизвестный код {from_ap} или {to_ap} в enum Airport")
-                    continue
-                
-                logger.info(f"    ✅ FLI: получили объекты Airport для {from_ap}→{to_ap}")
-                
-                filters = FlightSearchFilters(
-                    passenger_info=PassengerInfo(adults=1),
-                    flight_segments=[
-                        FlightSegment(
-                            departure_airport=[[from_airport, 0]],
-                            arrival_airport=[[to_airport, 0]],
-                            travel_date=date,
-                        )
-                    ],
-                    seat_type=SeatType.ECONOMY,
-                    stops=MaxStops.ANY,
-                    sort_by=SortBy.CHEAPEST,
-                )
-                logger.info(f"    📋 FLI: фильтры созданы")
-                
-                search = SearchFlights()
-                logger.info(f"    🔎 FLI: выполняем поиск...")
-                flights = search.search(filters)
-                logger.info(f"    📦 FLI: поиск завершён, получено {len(flights) if flights else 0} рейсов")
-                
-                if not flights:
-                    logger.warning(f"    ⚠️ FLI: рейсы не найдены для {from_ap}→{to_ap}")
-                    continue
-                
-                # Парсим результаты
-                parsed_count = 0
-                for flight in flights[:25]:
-                    try:
-                        price = getattr(flight, 'price', None)
-                        if not price:
-                            continue
-                        
-                        airline = getattr(flight, 'airline', 'N/A')
-                        price_usd = float(price)
-                        
-                        segments = []
-                        total_duration = 0
-                        try:
-                            for leg in flight.legs:
-                                dep_time = leg.departure_datetime.strftime("%Y-%m-%d %H:%M")
-                                arr_time = leg.arrival_datetime.strftime("%Y-%m-%d %H:%M")
-                                segments.append({
-                                    'from_code': leg.departure_airport.value,
-                                    'to_code': leg.arrival_airport.value,
-                                    'departure': dep_time,
-                                    'arrival': arr_time,
-                                    'duration': 0,
-                                    'departure_hour': leg.departure_datetime.hour
-                                })
-                                total_duration += int((leg.arrival_datetime - leg.departure_datetime).total_seconds() // 60)
-                        except Exception as e:
-                            logger.warning(f"    ⚠️ FLI: ошибка парсинга сегментов: {e}")
-                            pass
-                        
-                        all_flights.append({
-                            'airline': airline,
-                            'price_usd': price_usd,
-                            'segments': segments,
-                            'total_segments': len(segments) if segments else 1,
-                            'total_duration': total_duration,
-                            'stops': len(segments) - 1 if segments else 0,
-                            'source': 'fli',
-                            'ticket_link': 'https://www.google.com/travel/flights'
-                        })
-                        parsed_count += 1
-                    except Exception as e:
-                        logger.error(f"    ❌ FLI: ошибка парсинга отдельного рейса: {e}")
-                        continue
-                
-                if parsed_count > 0:
-                    logger.info(f"    ✅ FLI: добавлено {parsed_count} рейсов для {from_ap}→{to_ap}")
-                
-            except Exception as e:
-                logger.error(f"    ❌ FLI: ошибка для {from_ap}→{to_ap}: {e}", exc_info=True)
-                continue
-    
-    logger.info(f"📊 FLI: всего собрано {len(all_flights)} рейсов")
-    if all_flights:
-        logger.info(f"✅ FLI: {len(all_flights)}")
-    return all_flights
-
 # --- FAST-FLIGHTS (FALLBACK) ---
 def search_google_flights_fallback(origin, destination, date):
     """
@@ -763,7 +745,7 @@ def search_all_flights(from_city, to_city, date):
         
         # 1️⃣ AVIASALES
         logger.info("🔍 1️⃣ Aviasales...")
-        future_aviasales = executor.submit(search_aviasales, from_city, to_city, date)
+        future_aviasales = executor.submit(search_aviasales_data_api, from_city, to_city, date)
         futures['Aviasales'] = future_aviasales
         
         # 2️⃣ GOOGLE FLIGHTS v2
