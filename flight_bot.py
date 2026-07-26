@@ -278,15 +278,24 @@ def get_airports_for_city(city_code):
 
 # --- ГЕНЕРАЦИЯ ССЫЛКИ НА AVIASALES ---
 def generate_aviasales_link(origin, destination, date, adults=1):
-    base_url = "https://www.aviasales.com/search"
-    params = {
-        "origin": origin,
-        "destination": destination,
-        "departure_date": date,
-        "adults": adults,
-    }
-    query_string = "&".join([f"{k}={v}" for k, v in params.items()])
-    return f"{base_url}?{query_string}"
+    """
+    Генерирует ссылку на Aviasales с автоматическим запуском поиска
+    Формат: https://www.aviasales.ru/search/MOW0208DXB1?request_source=search_form
+    """
+    # Форматируем дату: день+месяц (2 цифры каждое)
+    try:
+        dt = datetime.strptime(date, "%Y-%m-%d")
+        day = str(dt.day).zfill(2)
+        month = str(dt.month).zfill(2)
+        date_str = f"{day}{month}"
+    except:
+        # Если дата не распарсилась, используем пустую строку
+        date_str = ""
+    
+    # Формируем ссылку с автоматическим запуском поиска
+    base_url = "https://www.aviasales.ru/search"
+    params = f"{origin}{date_str}{destination}{adults}"
+    return f"{base_url}/{params}?request_source=search_form"
 
 # --- БАЗА АЭРОПОРТОВ И КОНВЕРТЕРЫ ---
 def load_airports():
@@ -886,17 +895,30 @@ def parse_single_flight_segment(seg_str):
 
 # --- ОСНОВНАЯ ФУНКЦИЯ ПОИСКА ---
 def search_all_flights(from_city, to_city, date):
+    """
+    Поиск рейсов через fast-flights (основной и единственный источник)
+    Aviasales используется только для ссылок на покупку (отдельная функция)
+    """
     logger.info(f"🚀 Поиск: {from_city} → {to_city} на {date}")
+    
     all_flights = []
     results_lock = threading.Lock()
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    
+    # Используем только один воркер, так как у нас один источник
+    with ThreadPoolExecutor(max_workers=1) as executor:
         futures = {}
-        logger.info("🔍 1️⃣ Aviasales Data API...")
-        future_aviasales = executor.submit(search_aviasales_data_api, from_city, to_city, date)
-        futures['Aviasales Data API'] = future_aviasales
-        logger.info("🔍 2️⃣ fast-flights...")
+        
+        # fast-flights (основной источник)
+        logger.info("🔍 Поиск через fast-flights...")
         future_ff = executor.submit(search_google_flights_fallback, from_city, to_city, date)
         futures['fast-flights'] = future_ff
+        
+        # Aviasales Data API (временно отключён из-за проблем с аэропортами и временем)
+        # logger.info("🔍 Aviasales Data API...")
+        # future_aviasales = executor.submit(search_aviasales_data_api, from_city, to_city, date)
+        # futures['Aviasales Data API'] = future_aviasales
+        
+        # Собираем результаты
         for source_name, future in futures.items():
             try:
                 result = future.result(timeout=20)
@@ -908,6 +930,8 @@ def search_all_flights(from_city, to_city, date):
                 logger.warning(f"⏰ {source_name}: timeout")
             except Exception as e:
                 logger.error(f"❌ {source_name}: {e}")
+    
+    # Убираем дубликаты (по авиакомпании и цене)
     unique_flights = []
     seen = set()
     for flight in sorted(all_flights, key=lambda x: x.get('price_usd', 9999)):
@@ -915,9 +939,9 @@ def search_all_flights(from_city, to_city, date):
         if key not in seen:
             seen.add(key)
             unique_flights.append(flight)
+    
     logger.info(f"📊 ИТОГО: {len(unique_flights)} рейсов")
     return unique_flights[:100]
-
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ВЫВОДА ---
 MONTHS_RU = {1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля', 5: 'мая', 6: 'июня', 7: 'июля', 8: 'августа', 9: 'сентября', 10: 'октября', 11: 'ноября', 12: 'декабря'}
 WEEKDAYS_RU = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'}
