@@ -1178,25 +1178,50 @@ def get_favorite_city_keyboard():
     return InlineKeyboardMarkup(buttons)
 def get_favorite_airport_keyboard(user_id):
     prefs = get_user_preferences(user_id)
-    favorite_city = prefs.get('favorite_city', '')
+    favorite_city_code = prefs.get('favorite_city', '')
     
-    if not favorite_city:
+    if not favorite_city_code:
         buttons = [
             [InlineKeyboardButton("❌ Сначала выберите город", callback_data="settings_back")],
             [InlineKeyboardButton("◀️ Назад", callback_data="settings_back")]
         ]
         return InlineKeyboardMarkup(buttons)
     
-    # Получаем список аэропортов для города (реальные IATA-коды)
-    codes = find_city_code(favorite_city)
+    # Явный маппинг кода города → список аэропортов
+    city_airports = {
+        "MOW": ["SVO", "DME", "VKO"],
+        "DXB": ["DXB", "DWC", "SHJ"],
+        "LON": ["LHR", "LGW", "STN", "LCY"],
+        "NYC": ["JFK", "EWR", "LGA"],
+        "PAR": ["CDG", "ORY", "BVA"],
+        "IST": ["IST", "SAW"],
+        "BKK": ["BKK", "DMK"],
+        "TYO": ["NRT", "HND"],
+        "PEK": ["PEK", "PKX"],
+        "PVG": ["PVG", "SHA"],
+        "AYT": ["AYT"],
+        "EVN": ["EVN"],
+        "NQZ": ["NQZ"],
+        "TAS": ["TAS"],
+        "GYD": ["GYD"],
+        "TBS": ["TBS"],
+        "AER": ["AER"],
+        "KGD": ["KGD"],
+        "LED": ["LED"],
+    }
     
-    # Если не нашли — используем fallback
+    codes = city_airports.get(favorite_city_code)
     if not codes:
-        # Для Москвы явно указываем аэропорты
-        if favorite_city == "MOW":
-            codes = ["SVO", "DME", "VKO"]
-        else:
-            codes = [favorite_city]
+        # Если код не найден, пробуем найти по названию города через обратный словарь CITIES
+        city_name = None
+        for name, code in CITIES.items():
+            if code == favorite_city_code:
+                city_name = name
+                break
+        if city_name:
+            codes = find_city_code(city_name)
+        if not codes:
+            codes = [favorite_city_code]  # fallback
     
     buttons = []
     for code in codes:
@@ -1206,7 +1231,7 @@ def get_favorite_airport_keyboard(user_id):
     buttons.append([InlineKeyboardButton("❌ Отключить", callback_data="fav_airport_none")])
     buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="settings_back")])
     return InlineKeyboardMarkup(buttons)
-
+    
 def get_popular_routes(user_id=None):
     routes = [("MOW", "DXB"), ("IST", "DXB"), ("MOW", "IST"), ("DXB", "BKK"), ("LON", "NYC")]
     if user_id:
