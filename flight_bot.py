@@ -15,6 +15,8 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+# --- КУРС ВАЛЮТ (обновляется из ЦБ РФ) ---
+USD_TO_RUB = 91.0  # Значение по умолчанию, обновится при запуске
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -243,14 +245,14 @@ AIRLINE_NAMES = {
     "MF": "Xiamen Airlines",
 }
 
-# --- КОНВЕРТАЦИЯ ВАЛЮТ ---
 def convert_to_usd(price, currency):
     if not price:
         return 0
     if currency.upper() == "USD":
         return float(price)
+    
     rates = {
-        "RUB": 0.011,
+        "RUB": 1 / USD_TO_RUB,  # Динамический курс
         "EUR": 1.10,
         "AED": 0.27,
         "GBP": 1.30,
@@ -260,6 +262,27 @@ def convert_to_usd(price, currency):
     }
     rate = rates.get(currency.upper(), 1.0)
     return round(float(price) * rate, 2)
+
+def update_exchange_rate_from_cbr():
+    """Обновляет курс USD/RUB из официального API ЦБ РФ"""
+    global USD_TO_RUB
+    try:
+        url = "https://www.cbr-xml-daily.ru/daily_json.js"
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        
+        data = response.json()
+        # В ответе курс USD находится в поле Valute.USD.Value
+        usd_rate = data['Valute']['USD']['Value']
+        
+        if usd_rate:
+            USD_TO_RUB = usd_rate
+            logger.info(f"✅ Курс ЦБ РФ обновлён: 1 USD = {USD_TO_RUB:.2f} RUB")
+        else:
+            logger.warning("⚠️ Не удалось получить курс ЦБ РФ, оставляем старый.")
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка при получении курса ЦБ РФ: {e}")
 
 def get_airports_for_city(city_code):
     """Возвращает список реальных аэропортов для кода города"""
@@ -967,9 +990,8 @@ def format_duration(minutes):
 
 def format_flight_card_compact(flight, index=None, label=None):
     price_usd = flight.get('price_usd', 'N/A')
-    usd_to_rub = 91.0
     if price_usd != 'N/A' and price_usd is not None:
-        price_rub = int(float(price_usd) * usd_to_rub)
+        price_rub = int(float(price_usd) * USD_TO_RUB)  # Используем актуальный курс
         price_str = f"${price_usd} (~{price_rub:,} ₽)".replace(',', ' ')
     else:
         price_str = "N/A"
@@ -1872,14 +1894,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- ЗАПУСК ---
 def main():
     init_db()
+    
+    # Обновляем курс при запуске (до того, как бот начнёт работать)
+    update_exchange_rate_from_cbr()
+    
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
     ping_thread = threading.Thread(target=keep_alive, daemon=True)
     ping_thread.start()
+    
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(callback_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    
     print("✅ Бот запущен!")
     application.run_polling()
 
