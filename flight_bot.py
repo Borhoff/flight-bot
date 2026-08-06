@@ -15,6 +15,74 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 from fast_flights import FlightQuery, Passengers, create_query, get_flights
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
+# --- БАЗА НАПРАВЛЕНИЙ ДЛЯ "ХОЧУ ВПЕЧАТЛЕНИЙ" ---
+DESTINATIONS = [
+    {
+        "id": "altai",
+        "name": "Алтай",
+        "country": "Россия",
+        "iata": "RGK",
+        "nearest_airport": "RGK",
+        "description": "Горные озёра, водопады и нетронутая природа. Рай для путешественников и фотографов.",
+        "emojis": "🏞️🌲⛰️",
+        "price_range": "budget",
+        "vibe": "nature",
+        "weather": "cold",
+        "image_url": "https://iili.io/Cr2QMRn.png"
+    },
+    {
+        "id": "kaliningrad",
+        "name": "Калининград",
+        "country": "Россия",
+        "iata": "KGD",
+        "nearest_airport": "KGD",
+        "description": "Самый западный город России. Средневековые замки, янтарный берег и уютные улочки с немецким шармом.",
+        "emojis": "🏰🌊🧡",
+        "price_range": "medium",
+        "vibe": "culture",
+        "weather": "moderate",
+        "image_url": "https://iili.io/Cr2QGHX.png"
+    },
+    {
+        "id": "karelia",
+        "name": "Карелия",
+        "country": "Россия",
+        "iata": "LED",
+        "nearest_airport": "LED",
+        "description": "Девственные леса, скалистые берега и тихие озёра. Удивительный северный край.",
+        "emojis": "🌲🪵🌊",
+        "price_range": "budget",
+        "vibe": "nature",
+        "weather": "cold",
+        "image_url": "https://iili.io/Cr2Q1St.png"
+    },
+    {
+        "id": "sochi",
+        "name": "Сочи",
+        "country": "Россия",
+        "iata": "AER",
+        "nearest_airport": "AER",
+        "description": "Черноморское побережье, горы и субтропики. Идеально для отдыха и активных прогулок.",
+        "emojis": "🌴🏔️☀️",
+        "price_range": "medium",
+        "vibe": "relax",
+        "weather": "warm",
+        "image_url": "https://iili.io/Cr2Q0lI.png"
+    },
+    {
+        "id": "tuva",
+        "name": "Тува",
+        "country": "Россия",
+        "iata": "KYZ",
+        "nearest_airport": "KYZ",
+        "description": "Бескрайние степи, шаманские обряды и горные реки. Место силы и свободы.",
+        "emojis": "🏔️🌾🪘",
+        "price_range": "budget",
+        "vibe": "adventure",
+        "weather": "warm",
+        "image_url": "https://iili.io/Cr2QVNs.png"
+    }
+]
 # --- КУРС ВАЛЮТ (обновляется из ЦБ РФ) ---
 USD_TO_RUB = 91.0  # Значение по умолчанию, обновится при запуске
 
@@ -442,6 +510,10 @@ CITY_NAME_CONVERTER = {
     "санкт-петербург": "saint petersburg",
     "saint petersburg": "saint petersburg",
     "спб": "saint petersburg",
+    "кызыл": "kyzyl",           # <-- Добавлено
+    "kyzyl": "kyzyl",           # <-- Добавлено
+    "горно-алтайск": "gorno-altaysk",  # <-- Добавлено
+    "gorno-altaysk": "gorno-altaysk",  # <-- Добавлено
 }
 
 def normalize_city_name(city_name):
@@ -496,7 +568,12 @@ def find_city_code(city_name):
         "kaliningrad": ["KGD"],
         "санкт-петербург": ["LED"],
         "saint petersburg": ["LED"],
-    }
+        "кызыл": ["KYZ"],                     # <-- Добавлено
+        "kyzyl": ["KYZ"],                     # <-- Добавлено
+        "горно-алтайск": ["RGK"],             # <-- Добавлено
+        "gorno-altaysk": ["RGK"],             # <-- Добавлено
+}
+
     if city_lower in popular_cities:
         return popular_cities[city_lower]
     if len(city_lower) == 3 and city_name.isupper():
@@ -968,8 +1045,29 @@ def search_all_flights(from_city, to_city, date):
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ВЫВОДА ---
 MONTHS_RU = {1: 'января', 2: 'февраля', 3: 'марта', 4: 'апреля', 5: 'мая', 6: 'июня', 7: 'июля', 8: 'августа', 9: 'сентября', 10: 'октября', 11: 'ноября', 12: 'декабря'}
 WEEKDAYS_RU = {0: 'Пн', 1: 'Вт', 2: 'Ср', 3: 'Чт', 4: 'Пт', 5: 'Сб', 6: 'Вс'}
-CITIES = {"Москва": "MOW", "Стамбул": "IST", "Дубай": "DXB", "Лондон": "LON", "Париж": "PAR", "Нью-Йорк": "NYC", "Бангкок": "BKK", "Токио": "TYO", "Пекин": "PEK", "Шанхай": "PVG", "Анталья": "AYT", "Ереван": "EVN", "Астана": "NQZ", "Ташкент": "TAS", "Баку": "GYD", "Тбилиси": "TBS", "Сочи": "AER", "Калининград": "KGD", "Санкт-Петербург": "LED"}
-
+CITIES = {
+    "Москва": "MOW",
+    "Стамбул": "IST",
+    "Дубай": "DXB",
+    "Лондон": "LON",
+    "Париж": "PAR",
+    "Нью-Йорк": "NYC",
+    "Бангкок": "BKK",
+    "Токио": "TYO",
+    "Пекин": "PEK",
+    "Шанхай": "PVG",
+    "Анталья": "AYT",
+    "Ереван": "EVN",
+    "Астана": "NQZ",
+    "Ташкент": "TAS",
+    "Баку": "GYD",
+    "Тбилиси": "TBS",
+    "Сочи": "AER",
+    "Калининград": "KGD",
+    "Санкт-Петербург": "LED",
+    "Кызыл": "KYZ",           # <-- Добавлено
+    "Горно-Алтайск": "RGK",   # <-- Добавлено
+}
 def format_date_with_weekday(date_str):
     try:
         dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M")
@@ -1101,6 +1199,7 @@ def get_reason_compact(flight, prefs):
 def get_main_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("✈️ Начать поиск")],
+        [KeyboardButton("🌍 Подобрать направление")],
         [KeyboardButton("⚙️ Настройки"), KeyboardButton("📊 История")],
         [KeyboardButton("❓ Помощь")]
     ], resize_keyboard=True)
@@ -1350,6 +1449,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard()
     )
 
+async def start_destination_picker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начинает подбор направления"""
+    context.user_data.clear()
+    context.user_data['state'] = 'dest_budget'
+    
+    keyboard = [
+        [InlineKeyboardButton("🟢 Бюджетный (~до 300$)", callback_data="dest_budget_budget")],
+        [InlineKeyboardButton("🟡 Средний (~300-800$)", callback_data="dest_budget_medium")],
+        [InlineKeyboardButton("🔴 Премиум (~800+$)", callback_data="dest_budget_premium")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "🌍 *Подберём для вас идеальное направление!*\n\n"
+        "💰 *Какой бюджет вы планируете?*",
+        parse_mode="Markdown",
+        reply_markup=reply_markup
+    )
+
+
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, is_callback: bool = False):
     user_data = context.user_data
     user_id = update.effective_user.id
@@ -1459,6 +1578,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_data = context.user_data
     user_id = update.effective_user.id
+
     if text == "✈️ Начать поиск":
         user_data.clear()
         await update.message.reply_text(
@@ -1469,6 +1589,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_city_keyboard(user_id, direction="from")
         )
         user_data['state'] = 'from_city'
+
+    elif text == "🌍 Подобрать направление":
+        await start_destination_picker(update, context)
+
     elif text == "⚙️ Настройки":
         prefs = get_user_preferences(user_id)
         priority = prefs.get('priority', 'balance')
@@ -1476,6 +1600,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pref_hours = prefs.get('preferred_hours', 'all')
         favorite_city = prefs.get('favorite_city', '')
         favorite_airport = prefs.get('favorite_airport', '')
+        
         priority_names = {'price': '💰 Цена', 'speed': '⚡ Скорость', 'comfort': '⭐ Комфорт', 'convenience': '🛋️ Удобство', 'balance': '⚖️ Баланс'}
         stops_names = {0: '🟢 Прямые', 1: '🟡 1 пересадка', 2: '🟠 2 пересадки', 3: '🔵 Любые'}
         hours_names = {'morning': '🌅 Утро (6-12)', 'day': '☀️ День (12-18)', 'evening': '🌆 Вечер (18-23)', 'night': '🌙 Ночь (23-6)', 'all': '🕐 Любое время'}
@@ -1486,6 +1611,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     fav_city_name = name
                     break
         fav_airport_name = get_airport_name(favorite_airport) if favorite_airport else "Не выбран"
+        
         await update.message.reply_text(
             f"⚙️ *Ваши настройки:*\n\n"
             f"🎯 Приоритет: {priority_names.get(priority, 'Баланс')}\n"
@@ -1497,12 +1623,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=get_settings_keyboard(user_id)
         )
+
     elif text == "📊 История":
         await update.message.reply_text(
             "📊 *Ваша история поиска:*\n\nНажмите на запрос, чтобы повторить поиск.",
             parse_mode="Markdown",
             reply_markup=get_history_keyboard(user_id)
         )
+
     elif text == "❓ Помощь":
         help_text = (
             "✈️ *Как пользоваться ботом:*\n\n"
@@ -1516,6 +1644,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "`Стамбул → Дубай 2026-07-20`"
         )
         await update.message.reply_text(help_text, parse_mode="Markdown")
+
     elif user_data.get('state') == 'search_by_city':
         codes = find_city_code(text)
         if codes:
@@ -1544,6 +1673,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
         return
+
     elif user_data.get('state') == 'fav_city_manual':
         codes = find_city_code(text)
         if codes:
@@ -1559,6 +1689,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
         return
+
     elif user_data.get('state') == 'manual_date':
         if re.match(r'\d{4}-\d{2}-\d{2}', text):
             user_data['date'] = text
@@ -1566,6 +1697,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await perform_search(update, context)
         else:
             await update.message.reply_text("❌ Неправильный формат. Используй: ГГГГ-ММ-ДД")
+
     else:
         if len(text) > 3:
             codes = find_city_code(text)
@@ -1591,6 +1723,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         reply_markup=get_date_keyboard()
                     )
                     return
+
         await handle_manual_search(update, text, context)
 
 async def handle_manual_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1618,7 +1751,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_data = context.user_data
     user_id = update.effective_user.id
+
     logger.info(f"🔘 Callback: {data} от user {user_id}")
+
+    # --- ОБРАБОТЧИКИ НАСТРОЕК (существующие) ---
     if data == "settings_priority":
         await query.edit_message_text(
             "🎯 *Выберите приоритет поиска:*\n\n"
@@ -1632,6 +1768,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_priority_keyboard()
         )
         return
+
     if data == "search_by_city":
         user_data['state'] = 'search_by_city'
         if not user_data.get('from_city_codes'):
@@ -1647,6 +1784,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
         return
+
     elif data == "settings_favorite_city":
         await query.edit_message_text(
             "⭐ *Выберите избранный город вылета*\n\nВыберите из списка или нажмите «Ввести город вручную»:",
@@ -1654,6 +1792,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_favorite_city_keyboard()
         )
         return
+
     elif data == "fav_city_manual":
         user_data['state'] = 'fav_city_manual'
         await query.edit_message_text(
@@ -1661,6 +1800,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         return
+
     elif data == "settings_favorite_airport":
         await query.edit_message_text(
             "🛫 *Избранный аэропорт*\n\nРейсы из этого аэропорта будут показываться **первыми** в результатах поиска.\n\nЭто НЕ ограничивает поиск — бот всё равно ищет рейсы из всех аэропортов города,\nно рейсы из избранного аэропорта будут вверху списка.",
@@ -1668,6 +1808,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_favorite_airport_keyboard(user_id)
         )
         return
+
     elif data.startswith("fav_city_"):
         code = data.replace("fav_city_", "")
         if code == "none":
@@ -1688,6 +1829,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"✅ Избранный город: *{fav_name if fav_name else code}* ({code})", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
+
     elif data.startswith("fav_airport_"):
         code = data.replace("fav_airport_", "")
         if code == "none":
@@ -1702,6 +1844,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"✅ Избранный аэропорт: *{get_airport_name(code)} ({code})*", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
+
     elif data == "settings_stops":
         await query.edit_message_text(
             "🔄 *Максимум пересадок:*\n\nВыберите допустимое количество пересадок:",
@@ -1709,6 +1852,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_stops_keyboard()
         )
         return
+
     elif data == "settings_hours":
         await query.edit_message_text(
             "⏰ *Удобное время вылета:*\n\nВыберите предпочтительное время:",
@@ -1716,6 +1860,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_hours_keyboard()
         )
         return
+
     elif data == "settings_back":
         prefs = get_user_preferences(user_id)
         priority = prefs.get('priority', 'balance')
@@ -1723,6 +1868,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pref_hours = prefs.get('preferred_hours', 'all')
         favorite_city = prefs.get('favorite_city', '')
         favorite_airport = prefs.get('favorite_airport', '')
+        
         priority_names = {'price': '💰 Цена', 'speed': '⚡ Скорость', 'comfort': '⭐ Комфорт', 'convenience': '🛋️ Удобство', 'balance': '⚖️ Баланс'}
         stops_names = {0: '🟢 Прямые', 1: '🟡 1 пересадка', 2: '🟠 2 пересадки', 3: '🔵 Любые'}
         hours_names = {'morning': '🌅 Утро (6-12)', 'day': '☀️ День (12-18)', 'evening': '🌆 Вечер (18-23)', 'night': '🌙 Ночь (23-6)', 'all': '🕐 Любое время'}
@@ -1733,6 +1879,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     fav_city_name = name
                     break
         fav_airport_name = get_airport_name(favorite_airport) if favorite_airport else "Не выбран"
+        
         await query.edit_message_text(
             f"⚙️ *Ваши настройки:*\n\n"
             f"🎯 Приоритет: {priority_names.get(priority, 'Баланс')}\n"
@@ -1745,6 +1892,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_settings_keyboard(user_id)
         )
         return
+
     elif data.startswith("priority_"):
         priority = data.replace("priority_", "")
         prefs = get_user_preferences(user_id)
@@ -1754,6 +1902,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"✅ Приоритет изменен на: *{priority_names.get(priority, priority)}*\n\n⚙️ Настройки обновлены!", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
+
     elif data.startswith("stops_"):
         stops = int(data.replace("stops_", ""))
         prefs = get_user_preferences(user_id)
@@ -1763,6 +1912,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"✅ Максимум пересадок: *{stops_names.get(stops, 'Любые')}*\n\n⚙️ Настройки обновлены!", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
+
     elif data.startswith("hours_"):
         hours = data.replace("hours_", "")
         prefs = get_user_preferences(user_id)
@@ -1772,6 +1922,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"✅ Время вылета: *{hours_names.get(hours, 'Любое')}*\n\n⚙️ Настройки обновлены!", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
+
     elif data == "reset_settings":
         save_user_preferences(user_id, {'priority': 'balance', 'max_stops': 3, 'preferred_hours': 'all', 'favorite_city': '', 'favorite_airport': '', 'avoid_airports': ''})
         await query.edit_message_text(
@@ -1780,10 +1931,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
+
     elif data == "back_to_main":
         await query.edit_message_text("✈️ *Главное меню*", parse_mode="Markdown")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
+
     elif data == "manual_date":
         user_data['state'] = 'manual_date'
         await query.edit_message_text(
@@ -1791,6 +1944,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         return
+
     elif data == "popular_routes":
         await query.edit_message_text(
             "✈️ *Популярные маршруты*\n\nВыберите маршрут для быстрого поиска:",
@@ -1798,14 +1952,17 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_popular_routes(user_id)
         )
         return
+
     elif data == "history_empty":
         await query.edit_message_text("📭 История пока пуста. Сделайте свой первый поиск!")
         return
+
     elif data == "history_clear":
         delete_search_history(user_id)
         await query.edit_message_text("🗑️ История успешно очищена!")
         await query.message.reply_text("👇 Выберите действие:", reply_markup=get_main_keyboard())
         return
+
     elif data.startswith("history_"):
         parts = data.split("_")
         if len(parts) >= 5:
@@ -1822,6 +1979,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"🔍 Повторяем поиск: {from_city} → {to_city} на {date}")
             await perform_search(update, context, is_callback=True)
         return
+
     elif data.startswith("route_"):
         _, from_city, to_city = data.split("_")
         user_data['from_city_codes'] = [from_city]
@@ -1841,10 +1999,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_date_keyboard()
         )
         return
+
     elif data.startswith("city_"):
+        # Формат: city_{code}_{direction}
         parts = data.split("_")
         code = parts[1]
         direction = parts[2] if len(parts) > 2 else "from"
+        
         if direction == "from":
             user_data['from_city_codes'] = [code]
             city_name = code
@@ -1854,6 +2015,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     break
             user_data['from_city_name'] = city_name
             user_data['state'] = 'to_city'
+            
             await query.edit_message_text(
                 f"✅ *Вылет из:* {city_name} ({code})\n\n"
                 "🌍 *Куда летим?*\n"
@@ -1862,6 +2024,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_city_keyboard(user_id, selected_city=code, direction="to")
             )
         else:
+            # Выбор города прибытия
             user_data['to_city_codes'] = [code]
             city_name = code
             for name, c in CITIES.items():
@@ -1870,8 +2033,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     break
             user_data['to_city_name'] = city_name
             user_data['state'] = 'date'
+            
             from_city = user_data.get('from_city_name', '')
             from_code = user_data.get('from_city_codes', [''])[0]
+            
             await query.edit_message_text(
                 f"✅ *Вылет из:* {from_city} ({from_code})\n"
                 f"✅ *Прилёт в:* {city_name} ({code})\n\n"
@@ -1880,16 +2045,149 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=get_date_keyboard()
             )
+
+    # ==========================================================
+    # НОВЫЕ ОБРАБОТЧИКИ ДЛЯ "ХОЧУ ВПЕЧАТЛЕНИЙ"
+    # ==========================================================
+
+    elif data.startswith("dest_budget_"):
+        budget = data.replace("dest_budget_", "")
+        user_data['dest_budget'] = budget
+        
+        keyboard = [
+            [InlineKeyboardButton("🏔️ Приключение", callback_data="dest_vibe_adventure")],
+            [InlineKeyboardButton("🌊 Релакс", callback_data="dest_vibe_relax")],
+            [InlineKeyboardButton("🎭 Культура", callback_data="dest_vibe_culture")],
+            [InlineKeyboardButton("🌿 Природа", callback_data="dest_vibe_nature")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "🎯 *Какое настроение ищете?*",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
         return
+
+    elif data.startswith("dest_vibe_"):
+        vibe = data.replace("dest_vibe_", "")
+        user_data['dest_vibe'] = vibe
+        
+        keyboard = [
+            [InlineKeyboardButton("☀️ Тёплая", callback_data="dest_weather_warm")],
+            [InlineKeyboardButton("🌤️ Умеренная", callback_data="dest_weather_moderate")],
+            [InlineKeyboardButton("❄️ Холодная", callback_data="dest_weather_cold")],
+            [InlineKeyboardButton("🤷 Всё равно", callback_data="dest_weather_any")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            "🌡️ *Какая погода вам по душе?*",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+        return
+
+    elif data.startswith("dest_weather_"):
+        weather = data.replace("dest_weather_", "")
+        user_data['dest_weather'] = weather
+        
+        budget = user_data.get('dest_budget')
+        vibe = user_data.get('dest_vibe')
+        
+        # Ищем подходящие направления
+        matches = []
+        for dest in DESTINATIONS:
+            if dest['price_range'] != budget:
+                continue
+            if dest['vibe'] != vibe:
+                continue
+            if weather != 'any' and dest['weather'] != weather:
+                continue
+            matches.append(dest)
+        
+        if not matches:
+            matches = [d for d in DESTINATIONS if d['vibe'] == vibe]
+            if not matches:
+                matches = DESTINATIONS[:3]
+        
+        user_data['dest_matches'] = matches
+        user_data['dest_index'] = 0
+        
+        await query.edit_message_text(
+            f"🎯 Нашлось {len(matches)} направлений!\n\n"
+            "📅 *Теперь выберите дату вылета:*",
+            parse_mode="Markdown",
+            reply_markup=get_date_keyboard()
+        )
+        return
+
+    elif data.startswith("find_flights_"):
+        dest_id = data.replace("find_flights_", "")
+        # Ищем направление по id
+        destination = None
+        for dest in DESTINATIONS:
+            if dest['id'] == dest_id:
+                destination = dest
+                break
+        
+        if not destination:
+            await query.edit_message_text("⚠️ Направление не найдено.")
+            return
+        
+        from_city = "MOW"
+        airport_code = destination.get('nearest_airport', destination['iata'])
+        date = user_data.get('dest_date')
+        
+        if not date:
+            await query.edit_message_text("⚠️ Сначала выберите дату вылета.")
+            return
+        
+        # Находим название города для красивого отображения
+        city_name = airport_code
+        for name, code in CITIES.items():
+            if code == airport_code:
+                city_name = name
+                break
+        
+        aviasales_link = generate_aviasales_link(from_city, airport_code, date)
+        
+        await query.edit_message_text(
+            f"✈️ *Билеты из Москвы → {city_name} ({airport_code})*\n"
+            f"📅 на {date}\n\n"
+            f"🔗 [Найти билеты на Aviasales]({aviasales_link})",
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+        return
+
+    elif data == "dest_next":
+        matches = user_data.get('dest_matches', [])
+        index = user_data.get('dest_index', 0) + 1
+        if index >= len(matches):
+            index = 0
+        user_data['dest_index'] = index
+        await send_destination_card(update, query, matches[index])
+        return
+
+    # ==========================================================
+    # ОБРАБОТЧИК ВЫБОРА ДАТЫ (ОБНОВЛЁННЫЙ)
+    # ==========================================================
+
     elif data.startswith("date_"):
         date = data.replace("date_", "")
         user_data['date'] = date
-        await query.edit_message_text(f"✅ Выбрана дата: *{date}*", parse_mode="Markdown")
-        await perform_search(update, context, is_callback=True)
-        return
-    else:
-        logger.warning(f"⚠️ Неизвестный callback: {data}")
-        await query.edit_message_text("❌ Неизвестная команда. Попробуйте снова.")
+        
+        # Проверяем, не из потока ли "подобрать направление"
+        dest_matches = user_data.get('dest_matches')
+        if dest_matches:
+            # Сохраняем дату и показываем первую карточку
+            user_data['dest_date'] = date
+            await send_destination_card(update, query, dest_matches[0])
+            return
+        else:
+            # Обычный поиск через perform_search
+            await perform_search(update, context, is_callback=True)
 
 # --- ЗАПУСК ---
 def main():
