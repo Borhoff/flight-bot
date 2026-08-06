@@ -83,6 +83,39 @@ DESTINATIONS = [
         "image_url": "https://iili.io/Cr2QVNs.png"
     }
 ]
+
+async def send_destination_card(update, query, destination):
+    """Отправляет карточку направления с фото и описанием"""
+    caption = (
+        f"🏔️ *{destination['name']}*, {destination['country']}\n\n"
+        f"{destination['description']}\n\n"
+        f"{destination['emojis']} *Настроение:* {destination['vibe']}\n"
+        f"💰 *Бюджет:* {destination['price_range']}\n"
+        f"🌤️ *Погода:* {destination['weather']}"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("✈️ Найти билеты", callback_data=f"find_flights_{destination['id']}")],
+        [InlineKeyboardButton("➡️ Другое направление", callback_data="dest_next")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Отправляем фото
+    try:
+        await query.message.reply_photo(
+            photo=destination['image_url'],
+            caption=caption,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        # Если фото не загружается, отправляем текст
+        await query.message.reply_text(
+            caption + "\n\n🖼️ (фото не загрузилось, проверьте ссылку)",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+        logger.error(f"Ошибка загрузки фото: {e}")
 # --- КУРС ВАЛЮТ (обновляется из ЦБ РФ) ---
 USD_TO_RUB = 91.0  # Значение по умолчанию, обновится при запуске
 
